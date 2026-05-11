@@ -85,6 +85,9 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
     } else if (isOrder<MoveBallGoalOrder>(order)) {
         auto* mbg_order = dynamic_cast<MoveBallGoalOrder*>(order.get());
         std::optional<RelBall> rel_ball = rel_ball_sub.latest();
+        if (!rel_ball) {
+            return MotionCommand::Nothing;
+        }
         dest = {LocalizationUtils::relToAbs(rel_ball->pos_rel, current_pos->position), 0};
         focus = HeadFocus::BALL;
         omni_dist = 3.0f;  // Change also in dribble.cpp!!

@@ -74,10 +74,14 @@ float HeadControl::smoothTriAngStartTime(YawPitch head_pos, sta_settings sta_yaw
 }
 
 YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
-#ifdef ROBOT_MODEL_T1
+#if defined(ROBOT_MODEL_T1)
     float pitch_offset = 0;
     float cam_height = 1.05;
     float fps = 5000;
+#elif defined(ROBOT_MODEL_G1)
+    float pitch_offset = 0;
+    float cam_height = 1.05;
+    float fps = 50;
 #else
     float pitch_offset = 14_deg;
     float cam_height = 0.9;
@@ -104,10 +108,11 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
         head_pos = {imu_joint_state->serial[static_cast<size_t>(JointIndex::kHeadYaw)].q,
                     imu_joint_state->serial[static_cast<size_t>(JointIndex::kHeadPitch)].q};
     }
-#elif ROBOT_MODEL_T1
-// Booster doesn't set the head angles very well, so we just simulate it.
+#elif defined(ROBOT_MODEL_T1) || defined(ROBOT_MODEL_G1)
+    // T1/G1 head state is simulated here. G1 limits and degree conversion are enforced by the
+    // G1 servo adapter in the motion connector.
 #else
-    LOG_F(Error, "Unknown robot model in head control");
+    LOG_F(ERROR, "Unknown robot model in head control");
 #endif
 
     if (cur_focus == HeadFocus::LOC) {
@@ -117,6 +122,24 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
         head_pos = {smoothTriAng(time_step, sta_yaw), 15_deg};
     } else if (cur_focus == HeadFocus::BALL || cur_focus == HeadFocus::BALL_GOALIE) {
         std::optional<TeamComData> striker = striker_sub.latest();
+#ifdef ROBOT_MODEL_G1
+        std::optional<RelBall> rel_ball = rel_ball_sub.latest();
+        if (rel_ball && rel_ball->ball_age_us < 2_s) {
+            ball_found = true;
+            const float target_yaw = rel_ball->pos_rel.to_direction();
+            const float target_pitch =
+                    std::atan(cam_height / std::max(0.01f, rel_ball->pos_rel.magnitude())) -
+                    pitch_offset;
+            head_pos.yaw = normalizeRotation(
+                    head_pos.yaw + normalizeRotation(target_yaw - head_pos.yaw) * 8.f / fps);
+            head_pos.pitch =
+                    clamp(head_pos.pitch + (target_pitch - head_pos.pitch) * 8.f / fps, -20_deg,
+                          85_deg);
+            last_focus = cur_focus;
+            last_time = time;
+            return head_pos;
+        }
+#endif
         std::lock_guard<std::mutex> lck(ball_detection_mtx);
         if (last_ball_percept > time - 2_s) {
             ball_found = true;

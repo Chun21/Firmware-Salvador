@@ -1,4 +1,50 @@
 #pragma once
+
+#ifdef ROBOT_MODEL_G1
+
+#include <cmath>
+#include <memory>
+
+#include <unitree/idl/go2/SportModeState_.hpp>
+#include <unitree/idl/hg/IMUState_.hpp>
+#include <unitree/idl/hg/LowState_.hpp>
+#include <unitree/robot/channel/channel_subscriber.hpp>
+
+#include "sensor_pub_sub.h"
+
+namespace htwk {
+
+class Sensor {
+public:
+    Sensor();
+    ~Sensor();
+
+private:
+    void lowHandler(const void* msg);
+    void secondaryImuHandler(const void* msg);
+    void odomHandler(const void* msg);
+    void updateFallDownState(const IMU_new& imu);
+
+    bool is_fallen(const IMU_new& imu) const {
+        return std::fabs(imu.rpy[0]) > 0.6f || std::fabs(imu.rpy[1]) > 0.6f;
+    }
+
+    FallDownSide get_fall_down_side(const IMU_new& imu) const {
+        return imu.rpy[1] > 0.0f ? FallDownSide::FRONT : FallDownSide::BACK;
+    }
+
+    std::unique_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>
+            lowstate_subscriber;
+    std::unique_ptr<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::IMUState_>>
+            secondary_imu_subscriber;
+    std::unique_ptr<unitree::robot::ChannelSubscriber<unitree_go::msg::dds_::SportModeState_>>
+            odom_subscriber;
+};
+
+}  // namespace htwk
+
+#else
+
 #include <booster/idl/b1/FallDownState.h>
 #include <booster/idl/b1/LowState.h>
 #include <booster/idl/b1/Odometer.h>
@@ -58,3 +104,5 @@ private:
 };
 
 }  // namespace htwk
+
+#endif  // ROBOT_MODEL_G1

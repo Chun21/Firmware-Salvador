@@ -42,4 +42,17 @@ constexpr float upper_cam_pitch = 0.244f;
 // Relative position of upper cam to the neck joint
 constexpr point_3d cam_neck{.05f, -0.035f, .09f};
 
+#elif ROBOT_MODEL_G1
+
+// G1 uses external perception/localization in the current integration, but cam_pose is still
+// compiled because other common modules link against it. Keep a conservative head-camera geometry
+// here so the shared camera projection helpers have defined constants for G1 builds.
+constexpr float torso_length  = 0.35f;
+constexpr float foot_height   = 0.04f;
+
+constexpr float upper_cam_pitch = 0.0f;
+
+// Relative position of camera to the neck joint.
+constexpr point_3d cam_neck{.08f, 0.0f, .12f};
+
 #endif

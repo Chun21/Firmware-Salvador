@@ -19,8 +19,10 @@ elseif (CAMERA_MODEL STREQUAL "booster_camera")
     add_subdirectory(booster_camera)
     target_link_libraries(camera PRIVATE camera_booster_camera)
     target_link_libraries(camera_booster_camera PRIVATE rt)
+elseif (CAMERA_MODEL STREQUAL "external")
+    message(STATUS "Camera target built without hardware backend; external perception is used.")
 else()
-  message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'realsense' or 'booster_camera'.")
+  message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'realsense', 'booster_camera', or 'external'.")
 endif()
 
 target_link_libraries(camera PUBLIC

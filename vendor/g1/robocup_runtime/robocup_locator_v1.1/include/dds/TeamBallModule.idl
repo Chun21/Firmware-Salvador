@@ -1,0 +1,14 @@
+module TeamBallModule {
+    @final
+    struct TeamBall {
+        string team_id;
+        string robot_id;
+        float ball_field_x;
+        float ball_field_y;
+        float confidence;
+        float observer_field_x;
+        float observer_field_y;
+        float observer_field_theta;
+        unsigned long seq;
+    };
+};

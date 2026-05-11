@@ -10,6 +10,7 @@
 #include "joints.h"
 #include "localization_pub_sub.h"
 #include "motion_command.h"
+#include "multi_target_tracker_pub_sub.h"
 #include "sensor_pub_sub.h"
 #include "team_strategy_pub_sub.h"
 #include "vision_pub_sub.h"
@@ -51,6 +52,8 @@ private:
             imu_joint_states_channel.create_subscriber();
     htwk::ChannelSubscriber<std::optional<TeamComData>> striker_sub =
             striker_channel.create_subscriber();
+    htwk::ChannelSubscriber<std::optional<RelBall>> rel_ball_sub =
+            rel_ball_channel.create_subscriber();
     std::mutex ball_detection_mtx;
     int64_t last_ball_percept = 0;
     YawPitch ball_pos;

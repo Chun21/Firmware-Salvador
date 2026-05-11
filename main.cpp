@@ -1,4 +1,3 @@
-#include <camera.h>
 #include <signal.h>
 
 #include <atomic>
@@ -12,15 +11,9 @@
 #include "agent_runner.h"
 #include "always_play_gc.h"
 #include "async.h"
-#include "ball_tracker.h"
-#include "camera_pub_sub.h"
 #include "game_controller.h"
-#include "image.h"
-#include "localization.h"
 #include "logging.h"
 #include "multi_target_tracker_pub_sub.h"
-#include "near_obstacle_tracker.h"
-#include "odometer_processor.h"
 #include "parameter_tuner/parameter_tuner.h"
 #include "sensor/sensor.h"
 #include "shootorder.h"
@@ -30,11 +23,28 @@
 #include "team_strategy.h"
 #include "team_strategy_factory.h"
 #include "tts.h"
-#include "vision/htwk_vision.h"
 #include "vision_pub_sub.h"
 #include "walkcustomorder.h"
 #include "walkrelativeorder.h"
 #include "walktopositionorder.h"
+
+#ifndef ROBOT_MODEL_G1
+#include <camera.h>
+
+#include "ball_tracker.h"
+#include "camera_pub_sub.h"
+#include "image.h"
+#include "localization.h"
+#include "near_obstacle_tracker.h"
+#include "odometer_processor.h"
+#include "vision/htwk_vision.h"
+#endif
+
+#if ROBOT_MODEL_G1
+#include <unitree/robot/channel/channel_factory.hpp>
+
+#include "g1_external_adapters.h"
+#endif
 
 #ifndef SIMULATION_MODE
 
@@ -46,11 +56,15 @@
 #include "motion_connector_k1.h"
 #elif ROBOT_MODEL_T1
 #include "motion_connector_t1.h"
+#elif ROBOT_MODEL_G1
+#include "motion_connector_g1.h"
 #endif
 
 std::atomic<bool> running{true};
 
+#ifndef ROBOT_MODEL_G1
 extern htwk::Channel<std::shared_ptr<Image>> images;
+#endif
 
 void signalHandler(int signum) {
     if (signum == SIGINT) {
@@ -63,6 +77,7 @@ int64_t last_loop_log_time = time_us();
 
 uint64_t frame_number = 0;
 
+#ifndef ROBOT_MODEL_G1
 void visionLoop(TeamIdx team_id, PlayerIdx player_id, const std::string& strategy_name) {
     LOG_F(INFO, "Starting vision loop");
     htwk::HTWKVision vision_htwk;
@@ -215,6 +230,32 @@ void visionLoop(TeamIdx team_id, PlayerIdx player_id, const std::string& strateg
     }
     LOG_F(INFO, "Vision loop ended");
 }
+#endif
+
+#ifdef ROBOT_MODEL_G1
+void g1RoboCupLoop(TeamIdx team_id, PlayerIdx player_id, const std::string& strategy_name) {
+    LOG_F(INFO, "Starting G1 RoboCup loop with external detection/localization");
+    G1ExternalAdapters g1_external_adapters;
+    std::unique_ptr<TeamStrategy> team_strategy =
+            TeamStrategyFactory::create(strategy_name, team_id, player_id);
+    AgentRunner agent_runner("competition");
+
+    int64_t next_time = time_us();
+    while (running) {
+        g1_external_adapters.proceed();
+        team_strategy->proceed();
+        agent_runner.proceed();
+
+        next_time += 33_ms;
+        std::this_thread::sleep_until(
+                std::chrono::system_clock::time_point(std::chrono::microseconds(next_time)));
+        if (next_time < time_us() - 100_ms) {
+            next_time = time_us();
+        }
+    }
+    LOG_F(INFO, "G1 RoboCup loop ended");
+}
+#endif
 
 void motionLoop(PlayerIdx player_id) {
     LOG_F(INFO, "Starting motion loop");
@@ -226,6 +267,8 @@ void motionLoop(PlayerIdx player_id) {
         do {
 #ifdef ROBOT_MODEL_K1
             time += 5_ms;
+#elif defined(ROBOT_MODEL_G1)
+            time += 20_ms;
 #else
             time += 2_ms;
 #endif
@@ -252,12 +295,18 @@ int main(int argc, char** argv) {
     int team_id = 44;
     int player_id = 1;
     bool real_gc = false;
+    bool gc_flag = false;
+    bool gc3_flag = false;
     std::string strategy_name = "robocup";
     std::string rerun_ip;
 
     // read jersey number from file if possible
     int jerseyNumber = 2;  // default
+#ifdef ROBOT_MODEL_G1
+    std::string jerseyNumberFile = "/home/unitree/jerseynumber.txt";
+#else
     std::string jerseyNumberFile = "/home/booster/jerseynumber.txt";
+#endif
     if (boost::filesystem::exists(jerseyNumberFile)) {
         std::ifstream jerseyNumberStream(jerseyNumberFile);
         jerseyNumberStream >> jerseyNumber;  // set jersey number from file
@@ -278,9 +327,13 @@ int main(int argc, char** argv) {
             "team ID")("player,p",
                        boost::program_options::value<int>(&player_id)->default_value(player_id),
                        "player ID")(
-            "real_gamecontroller,gc",
+            "real_gamecontroller",
             boost::program_options::value<bool>(&real_gc)->default_value(real_gc),
-            "use real game controller")("strategy,s",
+            "use real game controller")(
+            "gc", boost::program_options::bool_switch(&gc_flag),
+            "use real GameController/GameController3-compatible referee box")(
+            "gc3", boost::program_options::bool_switch(&gc3_flag),
+            "use real GameController3-compatible referee box")("strategy,s",
                                         boost::program_options::value<std::string>(&strategy_name)
                                                 ->default_value(strategy_name),
                                         "name of the strategy to use")(
@@ -297,6 +350,9 @@ int main(int argc, char** argv) {
     } catch (const boost::program_options::error& ex) {
         std::cerr << "Error parsing command line arguments: " << ex.what() << "\n";
         return 1;
+    }
+    if (gc_flag || gc3_flag) {
+        real_gc = true;
     }
 
     if (vm.count("help")) {
@@ -327,9 +383,16 @@ int main(int argc, char** argv) {
 #else
     booster::robot::ChannelFactory::Instance()->Init(0, "192.168.10.102");
 #endif
+#elif ROBOT_MODEL_G1
+    const char* g1_network_interface = std::getenv("G1_NETWORK_INTERFACE");
+    unitree::robot::ChannelFactory::Instance()->Init(
+            0, g1_network_interface != nullptr ? g1_network_interface : "lo");
 #endif
     signal(SIGINT, signalHandler);
 
+#ifndef ROBOT_MODEL_G1
+    std::unique_ptr<htwk::Camera> camera;
+#endif
 #ifndef SIMULATION_MODE
     std::unique_ptr<GCInterface> gc_interface;
     if (real_gc) {
@@ -337,8 +400,10 @@ int main(int argc, char** argv) {
     } else {
         gc_interface = std::make_unique<AlwaysPlayGC>(team_id, player_id);
     }
-    std::unique_ptr<htwk::Camera> camera = htwk::choose_camera();
+#ifndef ROBOT_MODEL_G1
+    camera = htwk::choose_camera();
     camera->start();
+#endif
 
     htwk::Sensor sensor;
 #else
@@ -348,8 +413,13 @@ int main(int argc, char** argv) {
 
     TeamComNetwork team_com_network(team_id);
 
+#ifdef ROBOT_MODEL_G1
+    std::thread vision_thread =
+            named_thread("g1_robocup", g1RoboCupLoop, team_id, player_id, strategy_name);
+#else
     std::thread vision_thread =
             named_thread("vision", visionLoop, team_id, player_id, strategy_name);
+#endif
     std::thread motion_thread = named_thread("motion", motionLoop, player_id);
 
     // Wait for Ctrl+C
@@ -360,7 +430,11 @@ int main(int argc, char** argv) {
     LOG_F(INFO, "Starting shutdown sequence");
 
     // First stop the camera to prevent threads from blocking on new images
-    camera->stop();
+#ifndef ROBOT_MODEL_G1
+    if (camera) {
+        camera->stop();
+    }
+#endif
 
     vision_thread.join();
     LOG_F(INFO, "Vision thread joined");

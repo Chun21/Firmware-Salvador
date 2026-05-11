@@ -2,16 +2,34 @@
 
 #include <boost/asio.hpp>
 #include <chrono>
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <loguru.hpp>
 #include <thread>
 
 #include "RoboCupGameControlData.h"
 #include "gc_pub_sub.h"
 #include "named_thread.h"
+#include "robot_time.h"
+#include "stl_ext.h"
 
 GameController::GameController(uint8_t team_nr, uint8_t player_idx)
     : team_nr(team_nr), player_idx(player_idx) {
+    GCState initial_state;
+    initial_state.player_idx = player_idx;
+    initial_state.my_team.team_nr = team_nr;
+    initial_state.opp_team.team_nr = 0;
+    initial_state.my_team.players.resize(std::max<int>(5, player_idx + 1));
+    initial_state.opp_team.players.resize(std::max<int>(5, player_idx + 1));
+    initial_state.game_phase = GCState::GamePhase::FIRST_HALF;
+    initial_state.state = GameState::Initial;
+    initial_state.secondary_state = SecondaryState::Normal;
+    initial_state.kicking_team = KickingTeam::Unknown;
+    initial_state.remaining_message_budget = std::numeric_limits<uint16_t>::max();
+    gc_state.publish(initial_state);
+    state = initial_state;
+
     controller_thread = named_thread("game_controller", &GameController::run, this);
     heartbeat_thread = named_thread("gc_heartbeat", &GameController::send_heartbeats, this);
 }
@@ -107,21 +125,23 @@ void GameController::run() {
             continue;
         new_state.my_team.team_nr = team_nr;
         // TODO: Implement substitudes better.
-        for (int i = 0; i < gcData.playersPerTeam + 2; i++) {
+        const int player_count = std::clamp<int>(
+                std::max<int>(gcData.playersPerTeam, player_idx + 1), 1, MAX_NUM_PLAYERS);
+        for (int i = 0; i < player_count; i++) {
             Player player;
             player.is_penalized = gcData.teams[my_team_idx].players[i].penalty != PENALTY_NONE;
             new_state.my_team.players.push_back(player);
         }
         new_state.opp_team.team_nr = gcData.teams[1 - my_team_idx].teamNumber;
 
-        for (int i = 0; i < gcData.playersPerTeam + 2; i++) {
+        for (int i = 0; i < player_count; i++) {
             Player player;
             player.is_penalized = gcData.teams[1 - my_team_idx].players[i].penalty != PENALTY_NONE;
             new_state.opp_team.players.push_back(player);
         }
 
-        SecondaryState secondary_state = static_cast<SecondaryState>(gcData.secondaryState);
-        if (secondary_state == SecondaryState::PenaltyShoot) {
+        SecondaryState secondary_state = map_set_play(gcData.setPlay);
+        if (gcData.gamePhase == GAME_PHASE_PENALTYSHOOT) {
             new_state.game_phase = GCState::GamePhase::PENALTY_SHOOT;
         } else if (gcData.firstHalf == 1) {
             new_state.game_phase = GCState::GamePhase::FIRST_HALF;
@@ -130,24 +150,28 @@ void GameController::run() {
         }
         new_state.state = static_cast<GameState>(gcData.state);
         new_state.secondary_state = secondary_state;
-        if (gcData.kickOffTeam == DROPBALL)
-            new_state.kicking_team = KickingTeam::Both;
+        if (gcData.kickingTeam == KICKING_TEAM_NONE)
+            new_state.kicking_team = KickingTeam::Unknown;
         else
             new_state.kicking_team =
-                    gcData.kickOffTeam == team_nr ? KickingTeam::MyTeam : KickingTeam::OppTeam;
+                    gcData.kickingTeam == team_nr ? KickingTeam::MyTeam : KickingTeam::OppTeam;
         new_state.setPlay_kicking_team = state.setPlay_kicking_team;
-        if (gcData.secondaryState != STATE2_NORMAL && gcData.secondaryState != STATE2_OVERTIME &&
-            gcData.secondaryState != STATE2_TIMEOUT &&
-            gcData.secondaryState != STATE2_PENALTYSHOOT) {
-            new_state.setPlay_kicking_team = gcData.secondaryStateInfo[0] == team_nr
-                                                     ? KickingTeam::MyTeam
-                                                     : KickingTeam::OppTeam;
-            new_state.setPlay_state = static_cast<GameState>(gcData.secondaryStateInfo[1]);
+        if (gcData.setPlay != SET_PLAY_NONE) {
+            if (gcData.kickingTeam == KICKING_TEAM_NONE) {
+                new_state.setPlay_kicking_team = KickingTeam::Unknown;
+            } else {
+                new_state.setPlay_kicking_team = gcData.kickingTeam == team_nr
+                                                         ? KickingTeam::MyTeam
+                                                         : KickingTeam::OppTeam;
+            }
+            new_state.setPlay_state = new_state.state;
+        } else {
+            new_state.setPlay_kicking_team = KickingTeam::Unknown;
+            new_state.setPlay_state = GameState::Initial;
         }
-        new_state.secs_remaining = gcData.secsRemaining;
-        new_state.secondary_time = gcData.secondaryTime;
-        // Humanoid doesn't have a message budget, so allow the max possible.
-        new_state.remaining_message_budget = std::numeric_limits<uint16_t>::max();
+        new_state.secs_remaining = static_cast<uint16_t>(std::max<int16_t>(0, gcData.secsRemaining));
+        new_state.secondary_time = static_cast<uint16_t>(std::max<int16_t>(0, gcData.secondaryTime));
+        new_state.remaining_message_budget = gcData.teams[my_team_idx].messageBudget;
 
         {
             std::lock_guard<std::mutex> lock(heartbeat_mutex);
@@ -175,9 +199,8 @@ void GameController::send_heartbeats() {
     handle_socket_error("open", socket.open(boost::asio::ip::udp::v4(), ec));
 
     RoboCupGameControlReturnData returnData;
-    returnData.team = team_nr;
-    returnData.player = player_idx + 1;
-    returnData.message = GAMECONTROLLER_RETURN_MSG_ALIVE;
+    returnData.teamNum = team_nr;
+    returnData.playerNum = player_idx + 1;
 
     while (running) {
         std::optional<boost::asio::ip::udp::endpoint> current_endpoint;
@@ -188,6 +211,28 @@ void GameController::send_heartbeats() {
         }
 
         if (current_endpoint) {
+            if (auto loc_position = loc_position_subscriber.latestIfExists()) {
+                returnData.pose[0] = loc_position->position.x * 1000.0f;
+                returnData.pose[1] = loc_position->position.y * 1000.0f;
+                returnData.pose[2] = loc_position->position.a;
+            }
+
+            std::optional<RelBall> rel_ball = rel_ball_subscriber.latest();
+            if (rel_ball) {
+                returnData.ballAge =
+                        std::max(0.0f, static_cast<float>(time_us() - rel_ball->last_seen_time) /
+                                             1'000'000.0f);
+                returnData.ball[0] = rel_ball->pos_rel.x * 1000.0f;
+                returnData.ball[1] = rel_ball->pos_rel.y * 1000.0f;
+            } else {
+                returnData.ballAge = -1.0f;
+                returnData.ball[0] = 0.0f;
+                returnData.ball[1] = 0.0f;
+            }
+
+            const htwk::FallDownState fallen = fallen_subscriber.latest();
+            returnData.fallen = fallen.type == htwk::FallDownStateType::READY ? 0 : 1;
+
             socket.send_to(boost::asio::buffer(&returnData, sizeof(returnData)), *current_endpoint,
                            0, ec);
             if (ec) {
@@ -203,33 +248,29 @@ void GameController::send_heartbeats() {
 }
 
 bool GameController::isNewPackage(const RoboCupGameControlData& gcData) {
-    /*
-     * Here is a corner case. When someone switches from something to init the remaining time is set
-     * to 10 minutes so we will detect old packages and will recover after
-     * GAMECONTROLLER_MAX_FAULTS_TO_RESET wrong packets. This is not valid in normal games! So this
-     * is fine. Don't fix this.
-     */
-
-    /* Count faults because there could be a GC reset */
-    if (gcData.secsRemaining > lastValidGameControllerTimestamp) {
-        LOG_F(ERROR, "Old packet detected. Last received: %u vs %u new received timestamp.",
-              lastValidGameControllerTimestamp, gcData.secsRemaining);
-        numberOfOldPackagesReceived++;
-
-        if (numberOfOldPackagesReceived < PACKAGES_UNTIL_RESET) {
-            return false;
-        } else {
-            /* We have too many faults. Gamecontroller was may be restarted.
-             * We have to initialize our data again */
-            lastValidGameControllerTimestamp = gcData.secsRemaining;
-            numberOfOldPackagesReceived = 0;
-            LOG_F(ERROR, "GameController restart? We reinitialized.");
-        }
-    } else {
-        /* Packet is fine we have to reset our fault counter */
-        lastValidGameControllerTimestamp = gcData.secsRemaining;
-        numberOfOldPackagesReceived = 0;
+    if (has_last_packet && gcData.packetNumber == last_packet_number) {
+        return false;
     }
-
+    last_packet_number = gcData.packetNumber;
+    has_last_packet = true;
     return true;
+}
+
+SecondaryState GameController::map_set_play(uint8_t set_play) {
+    switch (set_play) {
+        case SET_PLAY_NONE:
+            return SecondaryState::Normal;
+        case SET_PLAY_GOAL_KICK:
+            return SecondaryState::GoalKick;
+        case SET_PLAY_PUSHING_FREE_KICK:
+            return SecondaryState::DirectFreeKick;
+        case SET_PLAY_CORNER_KICK:
+            return SecondaryState::CornerKick;
+        case SET_PLAY_KICK_IN:
+            return SecondaryState::ThrowIn;
+        case SET_PLAY_PENALTY_KICK:
+            return SecondaryState::PenaltyKick;
+        default:
+            return SecondaryState::Normal;
+    }
 }

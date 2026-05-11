@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-set(ROBOT_MODEL "k1" CACHE STRING "Robot model to use. 'k1' or 't1'")
+set(ROBOT_MODEL "k1" CACHE STRING "Robot model to use. 'k1', 't1', or 'g1'")
 set(ROBOT_SUBMODEL "" CACHE STRING "Robot submodel variant (optional)")
 
 option(SIMULATION_MODE "enable simulation mode" OFF)
@@ -9,11 +9,21 @@ if (${ROBOT_MODEL} STREQUAL "k1")
   set(CAMERA_MODEL "zed2" CACHE STRING "Camera model to use, options: 'zed2' or 'realsense'. Default is 'zed2'.")
 #elseif (${ROBOT_MODEL} STREQUAL "k1")
 #  set(CAMERA_MODEL "booster_camera" CACHE STRING "Camera model to use, options: 'zed2' or 'booster_camera'. Default is 'zed2'.")
+elseif(${ROBOT_MODEL} STREQUAL "g1")
+  set(CAMERA_MODEL "external" CACHE STRING "G1 uses the vendored RoboCup DDS perception bridge by default.")
 else()
   set(CAMERA_MODEL "realsense" CACHE STRING "Camera model to use, options: 'zed2' or 'realsense'. Default is 'realsense'.")
 endif()
 
-if(CAMERA_MODEL STREQUAL "zed2")
+if(CAMERA_MODEL STREQUAL "external")
+  add_compile_definitions(CAMERA_WIDTH=1280)
+  add_compile_definitions(CAMERA_HEIGHT=720)
+  add_compile_definitions(DEPTH_CAMERA_WIDTH=1280)
+  add_compile_definitions(DEPTH_CAMERA_HEIGHT=720)
+  add_compile_definitions(CAMERA_FOV_WIDTH=1.57079633)
+  add_compile_definitions(CAMERA_FOV_HEIGHT=1.13446401)
+  message(STATUS "Using external camera/perception")
+elseif(CAMERA_MODEL STREQUAL "zed2")
   add_compile_definitions(CAMERA_WIDTH=1280)
   add_compile_definitions(CAMERA_HEIGHT=720)
   add_compile_definitions(DEPTH_CAMERA_WIDTH=1280)
@@ -38,7 +48,7 @@ elseif(CAMERA_MODEL STREQUAL "booster_camera")
     add_compile_definitions(CAMERA_FOV_WIDTH=1.8465583)
     add_compile_definitions(CAMERA_FOV_HEIGHT=1.6559684)
 else()
-    message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'realsense', or 'booster_camera'.")
+    message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'realsense', 'booster_camera', or 'external'.")
 endif()
 
 if(SIMULATION_MODE)
@@ -63,9 +73,14 @@ if (${ROBOT_MODEL} STREQUAL "k1")
   add_compile_definitions(ROBOT_MODEL_K1)
 elseif(${ROBOT_MODEL} STREQUAL "t1")
   add_compile_definitions(ROBOT_MODEL_T1)
+elseif(${ROBOT_MODEL} STREQUAL "g1")
+  add_compile_definitions(ROBOT_MODEL_G1)
+  message(STATUS "Using robot model: G1")
+else()
+  message(FATAL_ERROR "Unknown ROBOT_MODEL '${ROBOT_MODEL}'. Use 'k1', 't1', or 'g1'.")
 endif()
 
-if(${ROBOT_SUBMODEL} STREQUAL "T1_robocup_version")
+if(ROBOT_SUBMODEL STREQUAL "T1_robocup_version")
   add_compile_definitions(ROBOT_SUBMODEL_T1_ROBOCUP_VERSION)
   message(STATUS "Using robot submodel: ${ROBOT_SUBMODEL}")
 endif()
@@ -84,8 +99,10 @@ else()
     elseif(CAMERA_MODEL STREQUAL "realsense")
         message(STATUS "Using Realsense camera")
         add_compile_definitions(REALSENSE_CAMERA)
+    elseif(CAMERA_MODEL STREQUAL "external")
+        message(STATUS "Using external G1 perception/localization")
     else()
-        message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'booster_camera' or 'realsense'.")
+        message(FATAL_ERROR "Unknown camera model: '${CAMERA_MODEL}'. Use 'zed2', 'booster_camera', 'realsense', or 'external'.")
     endif()
 endif()
 if(NOT CMAKE_BUILD_TYPE)
@@ -101,7 +118,11 @@ if(NOT SIMULATION_MODE)
   endif()
 endif()
 #find_package(realsense2 REQUIRED)
-include(booster_sdk.cmake)
+if(${ROBOT_MODEL} STREQUAL "g1")
+  include(g1_sdk.cmake)
+else()
+  include(booster_sdk.cmake)
+endif()
 
 set(HOST_SED_EXECUTABLE "/bin/sed")
 
@@ -116,10 +137,14 @@ target_compile_definitions(loguru INTERFACE LOGURU_WITH_STREAMS=1)
 include(tflite_sysroot.cmake)
 
 add_subdirectory(fluxlog fluxlog)
-add_subdirectory(fluxlog/fluxlog_vision fluxlog_vision)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(fluxlog/fluxlog_vision fluxlog_vision)
+endif()
 
-add_subdirectory(camera camera)
-add_subdirectory(camera/pub_sub camera_pub_sub)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(camera camera)
+  add_subdirectory(camera/pub_sub camera_pub_sub)
+endif()
 
 add_subdirectory(sensor/pub_sub sensor_pub_sub)
 if(SIMULATION_MODE)
@@ -128,7 +153,6 @@ else()
   add_subdirectory(sensor sensor)
 endif()
 
-add_subdirectory(game_controller game_controller)
 add_subdirectory(game_controller/humanoid gc_humanoid)
 add_subdirectory(game_controller/pub_sub gc_pub_sub)
 add_subdirectory(team_com/manager team_com_manager)
@@ -143,20 +167,32 @@ add_subdirectory(utils/pub_sub utils_pub_sub)
 add_subdirectory(utils/time utils_time)
 add_subdirectory(utils/time/real_time real_time)
 add_subdirectory(utils/vision_primitives utils_vision_primitives)
-add_subdirectory(vision vision)
-add_subdirectory(vision/booster_vision vision_booster_vision)
-add_subdirectory(vision/obstacle_detection_legacy vision_obstacle_detection_legacy)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(vision vision)
+  add_subdirectory(vision/booster_vision vision_booster_vision)
+  add_subdirectory(vision/obstacle_detection_legacy vision_obstacle_detection_legacy)
+endif()
 add_subdirectory(vision/pub_sub vision_pub_sub)
-add_subdirectory(near_obstacle_tracker near_obstacle_tracker)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(near_obstacle_tracker near_obstacle_tracker)
+endif()
 add_subdirectory(near_obstacle_tracker/pub_sub near_obstacle_tracker_pub_sub)
 add_subdirectory(soccerfield soccerfield)
-add_subdirectory(localization localization)
 add_subdirectory(localization/pub_sub localization_pub_sub)
-add_subdirectory(multi_target_tracker)
 add_subdirectory(multi_target_tracker/pub_sub multi_target_tracker_pub_sub)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(localization localization)
+  add_subdirectory(multi_target_tracker)
+endif()
+add_subdirectory(game_controller game_controller)
 add_subdirectory(head_control_nao)
+if(${ROBOT_MODEL} STREQUAL "g1")
+  add_subdirectory(g1_adapters)
+endif()
 add_subdirectory(agents)
-add_subdirectory(policy_executor)
+if(NOT ROBOT_MODEL STREQUAL "g1")
+  add_subdirectory(policy_executor)
+endif()
 add_subdirectory(orders)
 add_subdirectory(odometer)
 add_subdirectory(motion_connector)
@@ -174,45 +210,55 @@ message(STATUS "CXX compiler: ${CMAKE_CXX_COMPILER}")
 add_executable(${PROJECT_NAME} main.cpp)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-  booster_robotics_sdk
   odometer
   fastcdr
   fastrtps
   foonathan_memory-0.7.3
   fluxlog
-  fluxlog_vision
   game_controller
-  camera_pub_sub
-  camera
   team_com_network
   team_strategy
-  Vision
   vision_pub_sub
-  vision_booster_vision
-  vision_obstacle_detection_legacy
-  near_obstacle_tracker
   near_obstacle_tracker_pub_sub
-  localization
   sensor_pub_sub
   sensor
   utils
-  MultiTargetTracker
   multi_target_tracker_pub_sub
   Orders
   Agents
   head_control
   motion_connector
   real_time
-  cam_pose
   Boost::program_options 
   Boost::filesystem
   odometer
 )
 
-if (NOT SIMULATION_MODE)
+if(${ROBOT_MODEL} STREQUAL "g1")
+  target_link_libraries(${PROJECT_NAME} PRIVATE
+    unitree_sdk2
+    g1_adapters
+  )
+else()
+  target_link_libraries(${PROJECT_NAME} PRIVATE
+    booster_robotics_sdk
+    fluxlog_vision
+    camera_pub_sub
+    camera
+    Vision
+    vision_booster_vision
+    vision_obstacle_detection_legacy
+    near_obstacle_tracker
+    localization
+    MultiTargetTracker
+    cam_pose
+  )
+endif()
+
+if (NOT SIMULATION_MODE AND NOT ROBOT_MODEL STREQUAL "g1")
   # Link libraries required only on real robot
   target_link_libraries(${PROJECT_NAME} PUBLIC camera)
-else()
+elseif(SIMULATION_MODE)
 
   # Link libraries only required in simulation
   target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -265,6 +311,9 @@ foreach(target ${all_targets})
   endif()
 endforeach()
 
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/deploy/tactics"
+        DESTINATION ".")
+
 # Final override to prevent installing the Python wrapper file
 install(CODE "
   # Remove any install rule for _pywrap_tensorflow_interpreter_wrapper.so
@@ -275,4 +324,3 @@ install(CODE "
     file(WRITE \"${CMAKE_CURRENT_BINARY_DIR}/install_manifest.txt\" \"${CMAKE_INSTALL_MANIFEST_FILES}\")
   endif()
 ")
-

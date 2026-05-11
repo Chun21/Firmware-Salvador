@@ -1,5 +1,5 @@
 set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_SYSTEM_PROCESSOR x86_64)
+set(CMAKE_SYSTEM_PROCESSOR ${CMAKE_HOST_SYSTEM_PROCESSOR})
 
 # Force CMake to use the host's make and git, not the target's
 set(CMAKE_MAKE_PROGRAM "/usr/bin/make" CACHE FILEPATH "Path to the make program" FORCE)
@@ -22,7 +22,11 @@ set(TARGET_FS /l4t/targetfs)
 
 # Add compiler and linker search paths
 set(TARGET_LIB_PATH /usr/lib)
-set(TARGET_ARCH_LIB_PATH /usr/lib/x86_64-linux-gnu)
+if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+  set(TARGET_ARCH_LIB_PATH /usr/lib/aarch64-linux-gnu)
+else()
+  set(TARGET_ARCH_LIB_PATH /usr/lib/x86_64-linux-gnu)
+endif()
 set(COMPILER_LIB_PATH /usr/lib)
 
 # Explicitly set include and library paths for find_* commands
@@ -82,9 +86,9 @@ set(CMAKE_FIND_ROOT_PATH
     ${TOOLCHAIN_PATH}
 )
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
 # Explicitly set the prefix path for find_package within the sysroot
 set(CMAKE_PREFIX_PATH ${TARGET_FS}/usr)

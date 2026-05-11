@@ -12,8 +12,13 @@ target_link_libraries(${PROJECT_NAME}
     sensor_pub_sub 
     utils 
     fluxlog
-    booster_robotics_sdk
     time
 )
+
+if (${ROBOT_MODEL} STREQUAL "g1")
+target_link_libraries(${PROJECT_NAME} PUBLIC unitree_sdk2)
+else()
+target_link_libraries(${PROJECT_NAME} PUBLIC booster_robotics_sdk)
+endif()
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_20)

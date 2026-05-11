@@ -1,5 +1,106 @@
 #include "sensor.h"
 
+#ifdef ROBOT_MODEL_G1
+
+#include <cmath>
+#include <functional>
+
+#include "logging.h"
+#include "odometer.h"
+#include "robot_time.h"
+
+namespace htwk {
+
+namespace {
+
+IMU_new toImu(const unitree_hg::msg::dds_::IMUState_& imu_msg) {
+    IMU_new imu;
+    imu.gyro[0] = imu_msg.gyroscope()[0];
+    imu.gyro[1] = imu_msg.gyroscope()[1];
+    imu.gyro[2] = imu_msg.gyroscope()[2];
+    imu.rpy[0] = imu_msg.rpy()[0];
+    imu.rpy[1] = imu_msg.rpy()[1];
+    imu.rpy[2] = imu_msg.rpy()[2];
+    imu.acc[0] = imu_msg.accelerometer()[0];
+    imu.acc[1] = imu_msg.accelerometer()[1];
+    imu.acc[2] = imu_msg.accelerometer()[2];
+    return imu;
+}
+
+}  // namespace
+
+Sensor::Sensor() {
+    lowstate_subscriber =
+            std::make_unique<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::LowState_>>(
+                    "rt/lowstate", std::bind_front(&Sensor::lowHandler, this));
+    lowstate_subscriber->InitChannel();
+
+    secondary_imu_subscriber =
+            std::make_unique<unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::IMUState_>>(
+                    "rt/secondary_imu", std::bind_front(&Sensor::secondaryImuHandler, this));
+    secondary_imu_subscriber->InitChannel();
+
+    odom_subscriber = std::make_unique<
+            unitree::robot::ChannelSubscriber<unitree_go::msg::dds_::SportModeState_>>(
+            "rt/odommodestate", std::bind_front(&Sensor::odomHandler, this));
+    odom_subscriber->InitChannel();
+
+    fallen_channel.publish(FallDownState{});
+    LOG_F(INFO, "G1 sensor initialized: lowstate, secondary IMU, odom");
+}
+
+Sensor::~Sensor() {
+    if (lowstate_subscriber) {
+        lowstate_subscriber->CloseChannel();
+    }
+    if (secondary_imu_subscriber) {
+        secondary_imu_subscriber->CloseChannel();
+    }
+    if (odom_subscriber) {
+        odom_subscriber->CloseChannel();
+    }
+}
+
+void Sensor::lowHandler(const void* msg) {
+    const auto* low_state_msg = static_cast<const unitree_hg::msg::dds_::LowState_*>(msg);
+    updateFallDownState(toImu(low_state_msg->imu_state()));
+}
+
+void Sensor::secondaryImuHandler(const void* msg) {
+    const auto* imu_msg = static_cast<const unitree_hg::msg::dds_::IMUState_*>(msg);
+    updateFallDownState(toImu(*imu_msg));
+}
+
+void Sensor::odomHandler(const void* msg) {
+    const auto* odom_msg = static_cast<const unitree_go::msg::dds_::SportModeState_*>(msg);
+    const int64_t now = time_us();
+    Odometer odometer_state;
+    odometer_state.x = odom_msg->position()[0];
+    odometer_state.y = odom_msg->position()[1];
+    odometer_state.theta = odom_msg->imu_state().rpy()[2];
+    odometer_state.timestamp_system_us = now;
+    odometer_history.put(now, odometer_state);
+    odometer_channel.publish(std::make_shared<Odometer>(odometer_state));
+}
+
+void Sensor::updateFallDownState(const IMU_new& imu) {
+    FallDownState current = fallen_channel.create_subscriber().latest();
+    if (current.type == FallDownStateType::READY && is_fallen(imu)) {
+        current.type = FallDownStateType::FALLEN;
+        current.side = get_fall_down_side(imu);
+        LOG_F(ERROR, "G1 unsafe posture detected; entering FALLEN state");
+        fallen_channel.publish(current);
+    } else if (current.type == FallDownStateType::FALLEN && !is_fallen(imu)) {
+        current.to_succeeded();
+        LOG_F(INFO, "G1 posture back to READY");
+        fallen_channel.publish(current);
+    }
+}
+
+}  // namespace htwk
+
+#else
+
 #include <booster/idl/b1/LowCmd.h>
 #include <booster/idl/b1/LowState.h>
 #include <booster/idl/b1/MotorCmd.h>
@@ -184,8 +285,16 @@ Sensor::Sensor() {
 }
 
 Sensor::~Sensor() {
-    channel_subscriber_low->CloseChannel();
-    channel_subscriber_odo->CloseChannel();
-    channel_subscriber_fall_down->CloseChannel();
+    if (channel_subscriber_low) {
+        channel_subscriber_low->CloseChannel();
+    }
+    if (channel_subscriber_odo) {
+        channel_subscriber_odo->CloseChannel();
+    }
+    if (channel_subscriber_fall_down) {
+        channel_subscriber_fall_down->CloseChannel();
+    }
 }
 }  // namespace htwk
+
+#endif  // ROBOT_MODEL_G1

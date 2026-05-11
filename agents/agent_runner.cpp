@@ -6,11 +6,14 @@
 #include <logging.h>
 #include <motion_pub_sub.h>
 #include <search_ball.h>
-#include <shoot.h>
 #include <stl_ext.h>
 #include <walk_relative.h>
 #include <walk_to_pos.h>
 #include <goalie_dive.h>
+
+#ifndef ROBOT_MODEL_G1
+#include <shoot.h>
+#endif
 
 #include <future>
 
@@ -19,6 +22,14 @@
 AgentRunner::AgentRunner(std::string agent_selection) {
     // Agents registered first trump agents registered later.
     if (agent_selection == "competition") {
+#ifdef ROBOT_MODEL_G1
+        agents.emplace_back(new GoaliePositioningAgent);
+        agents.emplace_back(new WalkRelativeAgent);
+        agents.emplace_back(new LocalizeAgent);
+        agents.emplace_back(new BallSearchAgent);
+        agents.emplace_back(new DribbleAgent);
+        agents.emplace_back(new WalkToPositionAgent);
+#else
         agents.emplace_back(new GoalieDiveAgent);
         agents.emplace_back(new GoaliePositioningAgent);
         agents.emplace_back(new WalkRelativeAgent);
@@ -27,6 +38,7 @@ AgentRunner::AgentRunner(std::string agent_selection) {
         // agents.emplace_back(new ShootAgent);
         agents.emplace_back(new DribbleAgent);
         agents.emplace_back(new WalkToPositionAgent);
+#endif
     }
     thread_pool = std::make_unique<ThreadPool>("AgentPool", agents.size());
 }

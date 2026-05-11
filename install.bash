@@ -43,6 +43,7 @@ ROBOT_MODEL="t1"
 ##default is ""
 ROBOT_SUBMODEL="T1_robocup_version"
 CAMERA_MODEL="realsense"
+DEPLOY_USER="booster"
 
 find_cmd=find
 stat_cmd=stat
@@ -100,6 +101,7 @@ while [[ "$#" -gt 0 ]]; do
             BUILD_PATH="build-t1"
             ROBOT_MODEL="t1"
             CAMERA_MODEL="realsense"
+            DEPLOY_USER="booster"
             shift
             ;;
         --t1_robocup_version)
@@ -109,6 +111,7 @@ while [[ "$#" -gt 0 ]]; do
             ROBOT_MODEL="t1"
             ROBOT_SUBMODEL="T1_robocup_version"
             CAMERA_MODEL="realsense"
+            DEPLOY_USER="booster"
             shift
             ;;
         --k1z)
@@ -117,6 +120,7 @@ while [[ "$#" -gt 0 ]]; do
             BUILD_PATH="build-k1z"
             ROBOT_MODEL="k1"
             CAMERA_MODEL="zed2"
+            DEPLOY_USER="booster"
             shift
             ;;
         --k1bc)
@@ -125,6 +129,17 @@ while [[ "$#" -gt 0 ]]; do
             BUILD_PATH="build-k1bc"
             ROBOT_MODEL="k1"
             CAMERA_MODEL="booster_camera"
+            DEPLOY_USER="booster"
+            shift
+            ;;
+        --g1)
+            echo "building for Unitree G1"
+            DEPLOY_PATH="deploy_g1"
+            BUILD_PATH="build-g1"
+            ROBOT_MODEL="g1"
+            ROBOT_SUBMODEL=""
+            CAMERA_MODEL="external"
+            DEPLOY_USER="unitree"
             shift
             ;;
         -h|--help)
@@ -133,6 +148,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "-s | --ssid [SSID]                TBD update the Wifi of the Robot"
             echo "     --simulation                     build for simulation"
             echo "     --t1                             build for T1"
+            echo "     --g1                             build for Unitree G1"
             echo "     --k1                             build for K1 (default)"
             echo "-h | --help                           nobody really knows what this one does …"
             echo "     [ip of booster]                  ip address of the robot to deploy to, does not need to be ipv4"
@@ -174,11 +190,58 @@ if [ $DEPLOY_ONLY = false ] ; then
     USER_ID=$(id -u)
     GROUP_ID=$(id -g)
 
+    # Docker errors are otherwise indistinguishable from "image not found" in
+    # the image-inspect branch below. Fail early with an actionable message.
+    if ! docker info >/dev/null 2>&1; then
+        echo "❌ Docker daemon is not accessible for user '$USER'."
+        echo "   Make sure Docker is running and this user can access /var/run/docker.sock,"
+        echo "   e.g. add the user to the docker group and open a new shell, or run from a shell"
+        echo "   that has Docker daemon permission."
+        exit 1
+    fi
+
+    G1_DOCKER_ARGS=()
+    if [[ "$ROBOT_MODEL" == "g1" ]]; then
+        G1_ROBOCUP_DDS_ROOT="${G1_ROBOCUP_DDS_ROOT:-$LOCAL_DIR/vendor/g1/robocup_dds}"
+        UNITREE_SDK2_ROOT="${UNITREE_SDK2_ROOT:-$LOCAL_DIR/vendor/g1/unitree_sdk2}"
+
+        if [[ ! -f "$G1_ROBOCUP_DDS_ROOT/detection/DetectionModule.hpp" || \
+              ! -f "$G1_ROBOCUP_DDS_ROOT/location/LocationModule.hpp" ]]; then
+            echo "❌ G1 build requires vendored RoboCup DDS types."
+            echo "   Expected under: $G1_ROBOCUP_DDS_ROOT"
+            echo "   Required files:"
+            echo "     detection/DetectionModule.hpp"
+            echo "     location/LocationModule.hpp"
+            exit 1
+        fi
+
+        if [[ ! -d "$UNITREE_SDK2_ROOT" ]]; then
+            echo "❌ G1 build requires vendored Unitree SDK2."
+            echo "   Expected: $UNITREE_SDK2_ROOT"
+            exit 1
+        fi
+
+        G1_DOCKER_ARGS+=(
+            -e "G1_ROBOCUP_DDS_ROOT=$G1_ROBOCUP_DDS_ROOT"
+            -e "UNITREE_SDK2_ROOT=$UNITREE_SDK2_ROOT"
+        )
+        echo "Using G1 vendored RoboCup DDS: $G1_ROBOCUP_DDS_ROOT"
+        echo "Using G1 Unitree SDK2: $UNITREE_SDK2_ROOT"
+    fi
+
     # Check if Docker image exists, download from SFTP if needed
     if ! docker image inspect "$VERSIONED_IMAGE_NAME" >/dev/null 2>&1; then
         echo "Docker image $VERSIONED_IMAGE_NAME not found locally, downloading from SFTP..."
 
         IMAGE_FILENAME="${IMAGE_BASE_NAME}_${DOCKER_IMAGE_VERSION}"
+
+        if [[ -z "$SFTP_HOST" || -z "$SFTP_PORT" || -z "$SFTP_USER" || \
+              "$SFTP_HOST" == "your" || "$SFTP_PORT" == "infrastructure" || "$SFTP_USER" == "here" ]]; then
+            echo "❌ SFTP settings are not configured."
+            echo "   Please export SFTP_HOST, SFTP_PORT, and SFTP_USER before running install.bash."
+            echo "   Expected remote file: /toolchains/${IMAGE_FILENAME}.tar.zst"
+            exit 1
+        fi
 
         # Preflight: ensure required tools for download/decompression/import are available
         for required_cmd in scp zstd pv; do
@@ -270,29 +333,87 @@ if [ $DEPLOY_ONLY = false ] ; then
     fi
 
     echo "Running the build in $CONTAINER_NAME ..."
-    docker run --rm --network host -v $LOCAL_DIR:$LOCAL_DIR -v $(pwd)/$DEPLOY_PATH:/install $CONTAINER_NAME bash -c "  
-        cd $LOCAL_DIR &&
-        mkdir -p $BUILD_PATH &&
-        cd $BUILD_PATH &&
-        chown -R root:root ${LOCAL_DIR}/$BUILD_PATH &&
+    docker run --rm --network host -v $LOCAL_DIR:$LOCAL_DIR -v $(pwd)/$DEPLOY_PATH:/install "${G1_DOCKER_ARGS[@]}" $CONTAINER_NAME bash -c "
+        set -e
+        cd $LOCAL_DIR
+        mkdir -p $BUILD_PATH
+        cd $BUILD_PATH
+        chown -R root:root ${LOCAL_DIR}/$BUILD_PATH
 
         # Native build without cross-compilation
-         cmake --debug-trycompile -DCMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE -DCMAKE_COLOR_MAKEFILE=ON -DSIMULATION_MODE=$SIMULATION_MODE -DCMAKE_INSTALL_PREFIX=/install -DROBOT_MODEL=$ROBOT_MODEL -DROBOT_SUBMODEL=\"$ROBOT_SUBMODEL\" -DCAMERA_MODEL=$CAMERA_MODEL .. &&
-        CLICOLOR_FORCE=1 make -j$(nproc) install &&
+        cmake --debug-trycompile -DCMAKE_TOOLCHAIN_FILE=$CMAKE_TOOLCHAIN_FILE -DCMAKE_COLOR_MAKEFILE=ON -DSIMULATION_MODE=$SIMULATION_MODE -DCMAKE_INSTALL_PREFIX=/install -DROBOT_MODEL=$ROBOT_MODEL -DROBOT_SUBMODEL=\"$ROBOT_SUBMODEL\" -DCAMERA_MODEL=$CAMERA_MODEL ..
+        CLICOLOR_FORCE=1 make -j$(nproc) install
 
         # Copy shared libraries from baked sysroot into deployment (only for real robot builds)
         if [ \"$SIMULATION_MODE\" = \"OFF\" ] && [ -d \"/l4t/targetfs/usr/lib\" ]; then
-            mkdir -p /install/lib &&
-            shopt -s nullglob &&
+            mkdir -p /install/lib
+            shopt -s nullglob
             cp -a /l4t/targetfs/usr/lib/*.so* /install/lib/ 2>/dev/null || true &&
             if [ -d \"/l4t/targetfs/usr/lib/aarch64-linux-gnu\" ]; then
                 cp -a /l4t/targetfs/usr/lib/aarch64-linux-gnu/*.so* /install/lib/ 2>/dev/null || true
-            fi &&
+            fi
             shopt -u nullglob
         fi
         # delete Zed2 libs because they dynamically load libsl_ai.so from /usr/lib, so for now we use the ones present on the bot.
-        rm /install/lib/libsl_ai.so
-        rm /install/lib/libsl_zed.so
+        rm -f /install/lib/libsl_ai.so
+        rm -f /install/lib/libsl_zed.so
+
+        if [ \"$ROBOT_MODEL\" = \"g1\" ]; then
+            mkdir -p /install/lib/aarch64-linux-gnu
+
+            # Some third-party SDK packages ship linker-script placeholder files
+            # for SONAME entries. The runtime loader needs real symlinks.
+            if [ -f /install/lib/libddsc.so ]; then
+                rm -f /install/lib/libddsc.so.0
+                ln -sf libddsc.so /install/lib/libddsc.so.0
+            fi
+            if [ -f /install/lib/libddscxx.so ]; then
+                rm -f /install/lib/libddscxx.so.0
+                ln -sf libddscxx.so /install/lib/libddscxx.so.0
+            fi
+
+            # Recreate missing SONAME symlinks such as libfastcdr.so.2 and
+            # libfastrtps.so.2.13 from the actual shared-library metadata.
+            for so in /install/lib/*.so; do
+                [ -f \"\$so\" ] || continue
+                soname=\$(readelf -d \"\$so\" 2>/dev/null | awk -F'[][]' '/SONAME/ {print \$2; exit}')
+                if [ -n \"\$soname\" ]; then
+                    ln -sf \"\$(basename \"\$so\")\" \"/install/lib/\$soname\"
+                fi
+            done
+
+            # The G1 deploy is run on Ubuntu 20.04 robots while the current
+            # cross sysroot is Ubuntu 22.04. Bundle the matching loader and the
+            # small FastDDS dependency if present in the sysroot.
+            for loader in \
+                /l4t/targetfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 \
+                /l4t/targetfs/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1; do
+                if [ -f \"\$loader\" ]; then
+                    cp -a \"\$loader\" /install/lib/aarch64-linux-gnu/
+                    break
+                fi
+            done
+            find /l4t/targetfs -name 'libtinyxml2.so.9*' -exec cp -a {} /install/lib/ \\; 2>/dev/null || true
+
+            cat > /install/run_g1.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$DEPLOY_DIR/lib"
+LOADER="$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+
+cd "$DEPLOY_DIR"
+export G1_NETWORK_INTERFACE="${G1_NETWORK_INTERFACE:-eth0}"
+export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
+
+if [[ -x "$LOADER" ]]; then
+  exec "$LOADER" --library-path "$LIB_DIR:${LD_LIBRARY_PATH:-}" "$DEPLOY_DIR/bin/fw_salvador" --gc3 "$@"
+else
+  exec "$DEPLOY_DIR/bin/fw_salvador" --gc3 "$@"
+fi
+EOF
+            chmod +x /install/run_g1.sh
+        fi
     "
     check_success "Build process"
 
@@ -307,11 +428,11 @@ if [ -n "$DEPLOY_IP" ]; then
     echo "Deploying to robot at $DEPLOY_IP ..."
     fix_ssh_key_file_permissions
 
-    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l booster" ${DEPLOY_PATH}/bin/ booster@$DEPLOY_IP:/home/booster/bin/ --progress
+    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l ${DEPLOY_USER}" ${DEPLOY_PATH}/bin/ ${DEPLOY_USER}@$DEPLOY_IP:/home/${DEPLOY_USER}/bin/ --progress
     check_success "Uploaded binaries"
-    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l booster" ${DEPLOY_PATH}/lib/ booster@$DEPLOY_IP:/home/booster/lib/ --progress
+    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l ${DEPLOY_USER}" ${DEPLOY_PATH}/lib/ ${DEPLOY_USER}@$DEPLOY_IP:/home/${DEPLOY_USER}/lib/ --progress
     check_success "Uploaded libraries"
-    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l booster" deploy/ booster@$DEPLOY_IP:/home/booster/etc/ --progress
+    rsync -av --rsh="ssh -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file -l ${DEPLOY_USER}" deploy/ ${DEPLOY_USER}@$DEPLOY_IP:/home/${DEPLOY_USER}/etc/ --progress
     check_success "Uploaded files"
 
     if [ "$wifi_ssid" ]; then
@@ -320,7 +441,7 @@ if [ -n "$DEPLOY_IP" ]; then
 
     NTP_IP=$(./deploy-helpers/local_ipv4.py --no-fail)
 
-    ssh -t -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file booster@$DEPLOY_IP \
+    ssh -t -o StrictHostKeyChecking=no -i deploy-helpers/your.ssh.key.file ${DEPLOY_USER}@$DEPLOY_IP \
     NTP_SERVER_IP="$NTP_IP" 'bash -s' << 'EOF'
 
 echo "📡 Setting up NTP sync to $NTP_SERVER_IP ..."

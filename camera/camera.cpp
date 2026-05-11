@@ -27,6 +27,13 @@ std::unique_ptr<htwk::Camera> htwk::choose_camera() {
     return htwk::Camera::create_camera<Booster_Camera>();
 }
 
+#elif defined(ROBOT_MODEL_G1)
+
+std::unique_ptr<htwk::Camera> htwk::choose_camera() {
+    LOG_F(ERROR, "G1 uses external perception; choose_camera() must not be called");
+    return nullptr;
+}
+
 #else
 #error "No valid camera selected"
 

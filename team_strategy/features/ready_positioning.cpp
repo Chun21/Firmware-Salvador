@@ -21,13 +21,17 @@ map<size_t, vector<htwk::Position>> readTacticsFile(const string& file) {
         fileToRead = "tactics/" + file;
     else if (std::filesystem::exists("build/tactics/" + file))
         fileToRead = "build/tactics/" + file;
+    else if (std::filesystem::exists("deploy/tactics/" + file))
+        fileToRead = "deploy/tactics/" + file;
+    else if (std::filesystem::exists("/home/unitree/etc/tactics/" + file))
+        fileToRead = "/home/unitree/etc/tactics/" + file;
     else if (std::filesystem::exists("/home/booster/etc/tactics/" + file))
         fileToRead = "/home/booster/etc/tactics/" + file;
 
     ifstream is(fileToRead);
     if (!is.is_open()) {
         printf("Couldn't open team strategy tactics: %s\n", fileToRead.c_str());
-        exit(-3);
+        return {};
     }
     static const string rfloat = "([-+]?[0-9]*\\.?[0-9]+)";
     static const string rposition = rfloat + "," + rfloat + "," + rfloat;
