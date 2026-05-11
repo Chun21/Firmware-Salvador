@@ -141,7 +141,7 @@ void GameController::run() {
         }
 
         SecondaryState secondary_state = map_set_play(gcData.setPlay);
-        if (gcData.gamePhase == GAME_PHASE_PENALTYSHOOT) {
+        if (gcData.gamePhase == GAME_PHASE_PENALTY_SHOOT_OUT) {
             new_state.game_phase = GCState::GamePhase::PENALTY_SHOOT;
         } else if (gcData.firstHalf == 1) {
             new_state.game_phase = GCState::GamePhase::FIRST_HALF;
@@ -260,16 +260,18 @@ SecondaryState GameController::map_set_play(uint8_t set_play) {
     switch (set_play) {
         case SET_PLAY_NONE:
             return SecondaryState::Normal;
-        case SET_PLAY_GOAL_KICK:
-            return SecondaryState::GoalKick;
-        case SET_PLAY_PUSHING_FREE_KICK:
+        case SET_PLAY_DIRECT_FREE_KICK:
             return SecondaryState::DirectFreeKick;
-        case SET_PLAY_CORNER_KICK:
-            return SecondaryState::CornerKick;
-        case SET_PLAY_KICK_IN:
-            return SecondaryState::ThrowIn;
+        case SET_PLAY_INDIRECT_FREE_KICK:
+            return SecondaryState::IndirectFreeKick;
         case SET_PLAY_PENALTY_KICK:
             return SecondaryState::PenaltyKick;
+        case SET_PLAY_THROW_IN:
+            return SecondaryState::ThrowIn;
+        case SET_PLAY_GOAL_KICK:
+            return SecondaryState::GoalKick;
+        case SET_PLAY_CORNER_KICK:
+            return SecondaryState::CornerKick;
         default:
             return SecondaryState::Normal;
     }

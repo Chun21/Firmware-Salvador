@@ -407,9 +407,9 @@ export G1_NETWORK_INTERFACE="${G1_NETWORK_INTERFACE:-eth0}"
 export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
 
 if [[ -x "$LOADER" ]]; then
-  exec "$LOADER" --library-path "$LIB_DIR:${LD_LIBRARY_PATH:-}" "$DEPLOY_DIR/bin/fw_salvador" --gc3 "$@"
+  exec "$LOADER" --library-path "$LIB_DIR:${LD_LIBRARY_PATH:-}" "$DEPLOY_DIR/bin/fw_salvador" --gc "$@"
 else
-  exec "$DEPLOY_DIR/bin/fw_salvador" --gc3 "$@"
+  exec "$DEPLOY_DIR/bin/fw_salvador" --gc "$@"
 fi
 EOF
             chmod +x /install/run_g1.sh

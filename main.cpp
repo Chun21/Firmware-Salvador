@@ -331,9 +331,9 @@ int main(int argc, char** argv) {
             boost::program_options::value<bool>(&real_gc)->default_value(real_gc),
             "use real game controller")(
             "gc", boost::program_options::bool_switch(&gc_flag),
-            "use real GameController/GameController3-compatible referee box")(
+            "use real RoboCup GameController referee box")(
             "gc3", boost::program_options::bool_switch(&gc3_flag),
-            "use real GameController3-compatible referee box")("strategy,s",
+            "legacy alias for --gc; current protocol follows ~/GameController")("strategy,s",
                                         boost::program_options::value<std::string>(&strategy_name)
                                                 ->default_value(strategy_name),
                                         "name of the strategy to use")(
