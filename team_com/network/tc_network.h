@@ -1,6 +1,7 @@
 #include <boost/archive/binary_oarchive.hpp>
 #include <boost/serialization/optional.hpp>
 #include <boost/serialization/vector.hpp>
+#include <atomic>
 #include <sstream>
 #include <thread>
 
@@ -11,15 +12,21 @@ public:
     TeamComNetwork(uint8_t team_id, bool sending_allowed = true);
     ~TeamComNetwork() {
         shutdown = true;
+        // Wake the sender if it is blocked in tc_internal::broadcast.next().
+        tc_internal::broadcast.publish(TeamComData{});
         if (sender.joinable())
             sender.join();
-        receiver.join();
+        if (receiver.joinable())
+            receiver.join();
     }
 
 private:
     void send() {
         while (!shutdown) {
             TeamComData data = tc_internal::broadcast.next();
+            if (shutdown) {
+                break;
+            }
             std::string msg;
             std::stringstream ss;
             boost::archive::binary_oarchive oa(ss);
@@ -33,5 +40,5 @@ private:
     std::thread sender;
     std::thread receiver;
     uint8_t team_id;
-    bool shutdown = false;
+    std::atomic<bool> shutdown = false;
 };

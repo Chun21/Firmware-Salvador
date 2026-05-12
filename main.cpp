@@ -44,6 +44,8 @@
 #include <unitree/robot/channel/channel_factory.hpp>
 
 #include "g1_external_adapters.h"
+#include "localization_pub_sub.h"
+#include "motion_pub_sub.h"
 #endif
 
 #ifndef SIMULATION_MODE
@@ -64,6 +66,20 @@ std::atomic<bool> running{true};
 
 #ifndef ROBOT_MODEL_G1
 extern htwk::Channel<std::shared_ptr<Image>> images;
+#endif
+
+#ifdef ROBOT_MODEL_G1
+void seedG1StartupChannels() {
+    // G1 relies on external perception/localization DDS topics. During startup these samples may
+    // not have arrived yet, but common strategy/team-com/motion code calls latest() immediately.
+    // Seed safe defaults so the robot starts in a stopped, unlocalized state instead of reading
+    // default-constructed or out-of-range data.
+    loc_position_channel.publish(LocPosition{.position = htwk::Position(), .quality = 0.0f});
+    rel_ball_channel.publish(std::nullopt);
+    rel_robots_channel.publish({});
+    htwk::fallen_channel.publish(htwk::FallDownState{});
+    motion_command_channel.publish(MotionCommand::Stand());
+}
 #endif
 
 void signalHandler(int signum) {
@@ -386,7 +402,8 @@ int main(int argc, char** argv) {
 #elif ROBOT_MODEL_G1
     const char* g1_network_interface = std::getenv("G1_NETWORK_INTERFACE");
     unitree::robot::ChannelFactory::Instance()->Init(
-            0, g1_network_interface != nullptr ? g1_network_interface : "lo");
+            0, g1_network_interface != nullptr ? g1_network_interface : "eth0");
+    seedG1StartupChannels();
 #endif
     signal(SIGINT, signalHandler);
 

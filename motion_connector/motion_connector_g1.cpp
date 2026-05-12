@@ -57,9 +57,11 @@ MotionConnector::~MotionConnector() {
 }
 
 bool MotionConnector::movementAllowed(const GCState& state) const {
+    const bool player_is_penalized =
+            idx >= state.my_team.players.size() || state.my_team.players[idx].is_penalized;
     return !(state.state == GameState::Initial || state.state == GameState::Finished ||
              state.state == GameState::Standby || state.state == GameState::Set ||
-             state.my_team.players[idx].is_penalized);
+             player_is_penalized);
 }
 
 MotionCommand::WalkRequest MotionConnector::limitWalkRequest(

@@ -377,7 +377,11 @@ if [ $DEPLOY_ONLY = false ] ; then
             for so in /install/lib/*.so; do
                 [ -f \"\$so\" ] || continue
                 soname=\$(readelf -d \"\$so\" 2>/dev/null | awk -F'[][]' '/SONAME/ {print \$2; exit}')
-                if [ -n \"\$soname\" ]; then
+                # Do not overwrite real SONAME files that were copied from the sysroot.  Some
+                # libraries, e.g. Boost, ship both libfoo.so and libfoo.so.X.Y.Z.  Replacing the
+                # real versioned file with a symlink back to libfoo.so creates a circular symlink
+                # and the G1 runtime loader then reports \"cannot open shared object file\".
+                if [ -n \"\$soname\" ] && [ ! -e \"/install/lib/\$soname\" ]; then
                     ln -sf \"\$(basename \"\$so\")\" \"/install/lib/\$soname\"
                 fi
             done
@@ -394,22 +398,61 @@ if [ $DEPLOY_ONLY = false ] ; then
                 fi
             done
             find /l4t/targetfs -name 'libtinyxml2.so.9*' -exec cp -a {} /install/lib/ \\; 2>/dev/null || true
+            for boost_lib in \
+                libboost_program_options \
+                libboost_filesystem \
+                libboost_serialization; do
+                find /l4t/targetfs/usr/lib /l4t/targetfs/usr/lib/aarch64-linux-gnu \
+                    -maxdepth 1 -name "\${boost_lib}.so*" -exec cp -a {} /install/lib/ \\; 2>/dev/null || true
+            done
+
+            # Make direct execution work on Unitree G1 as well:
+            #   ./bin/fw_salvador --gc
+            #
+            # The real ELF is linked against the bundled cross-sysroot libraries. Running it
+            # directly with the robot's system loader can crash before main() on some G1 images.
+            # Keep the ELF as fw_salvador.real and install fw_salvador as a small launcher that
+            # selects the bundled loader/library path.
+            if [ -f /install/bin/fw_salvador ] && [ ! -f /install/bin/fw_salvador.real ]; then
+                mv /install/bin/fw_salvador /install/bin/fw_salvador.real
+            fi
+
+            cat > /install/bin/fw_salvador <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+BIN_DIR=\$(cd \$(dirname \${BASH_SOURCE[0]}) && pwd)
+DEPLOY_DIR=\$(cd \$BIN_DIR/.. && pwd)
+LIB_DIR=\$DEPLOY_DIR/lib
+LOADER=\$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1
+REAL_BIN=\$BIN_DIR/fw_salvador.real
+
+export G1_NETWORK_INTERFACE=\${G1_NETWORK_INTERFACE:-eth0}
+export LD_LIBRARY_PATH=\$LIB_DIR:\${LD_LIBRARY_PATH:-}
+
+if [[ -x \$LOADER ]]; then
+  exec \$LOADER --library-path \$LIB_DIR:\${LD_LIBRARY_PATH:-} \$REAL_BIN \$@
+else
+  exec \$REAL_BIN \$@
+fi
+EOF
+            chmod +x /install/bin/fw_salvador
 
             cat > /install/run_g1.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="$DEPLOY_DIR/lib"
-LOADER="$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+DEPLOY_DIR=\$(cd \$(dirname \${BASH_SOURCE[0]}) && pwd)
+LIB_DIR=\$DEPLOY_DIR/lib
+LOADER=\$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1
+REAL_BIN=\$DEPLOY_DIR/bin/fw_salvador.real
 
-cd "$DEPLOY_DIR"
-export G1_NETWORK_INTERFACE="${G1_NETWORK_INTERFACE:-eth0}"
-export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
+cd \$DEPLOY_DIR
+export G1_NETWORK_INTERFACE=\${G1_NETWORK_INTERFACE:-eth0}
+export LD_LIBRARY_PATH=\$LIB_DIR:\${LD_LIBRARY_PATH:-}
 
-if [[ -x "$LOADER" ]]; then
-  exec "$LOADER" --library-path "$LIB_DIR:${LD_LIBRARY_PATH:-}" "$DEPLOY_DIR/bin/fw_salvador" --gc "$@"
+if [[ -x \$LOADER ]]; then
+  exec \$LOADER --library-path \$LIB_DIR:\${LD_LIBRARY_PATH:-} \$REAL_BIN --gc \$@
 else
-  exec "$DEPLOY_DIR/bin/fw_salvador" --gc "$@"
+  exec \$REAL_BIN --gc \$@
 fi
 EOF
             chmod +x /install/run_g1.sh

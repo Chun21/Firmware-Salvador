@@ -18,9 +18,11 @@ TeamComManager::TeamComManager(PlayerIdx idx) : idx(idx), myself(idx) {
 
 void TeamComManager::send() {
     GCState gc_state = gc_state_sub.latest();
+    const bool player_is_penalized =
+            idx >= gc_state.my_team.players.size() || gc_state.my_team.players[idx].is_penalized;
     if (gc_state.state == GameState::Initial || gc_state.state == GameState::Finished ||
         gc_state.state == GameState::Standby || gc_state.is_fake_gc ||
-        gc_state.my_team.players[idx].is_penalized) {
+        player_is_penalized) {
         return;
     }
     TeamComData data = getTeamComMyself();

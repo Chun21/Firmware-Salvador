@@ -16,13 +16,15 @@ void TeamStrategy::proceed() {
     }
     robots = tc_manager.getRobots();
     myself = tc_manager.getMyself(true);
+    time = myself.last_update_us;
     robots[myself.idx] = tc_manager.getTeamComMyself();
     std::erase_if(robots, [this](const auto& robot) {
-        return gc_data.my_team.players[robot.first].is_penalized ||
+        return robot.first >= gc_data.my_team.players.size() ||
+               gc_data.my_team.players[robot.first].is_penalized ||
                robot.second.sent_time_us < time - 5_s;
     });
-    time = myself.last_update_us;
-    penalized = gc_data.my_team.players[player_idx].is_penalized;
+    penalized = player_idx >= gc_data.my_team.players.size() ||
+                gc_data.my_team.players[player_idx].is_penalized;
     if (!penalized && prev_penalized) {
         penalty_return_us = time;
         returning_from_penalty = true;

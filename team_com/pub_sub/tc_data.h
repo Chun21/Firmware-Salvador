@@ -53,7 +53,10 @@ public:
 private:
     void updateMyself() {
         auto gc_state = gc_state_sub.latestIfExists();
-        myself.penalized = gc_state ? gc_state->my_team.players[myself.idx].is_penalized : true;
+        myself.penalized = true;
+        if (gc_state && myself.idx < gc_state->my_team.players.size()) {
+            myself.penalized = gc_state->my_team.players[myself.idx].is_penalized;
+        }
         myself.loc = loc_sub.latest();
         myself.ball = rel_ball_sub.latest();
         myself.last_update_us = time_us();
@@ -110,9 +113,10 @@ struct TeamComData {
         ss << "TeamComData(player_idx=" << int(player_idx) << ", is_fallen=" << is_fallen
            << ", pos=" << pos.x << ", " << pos.y << ", " << pos.a << ", loc_quality=" << loc_quality
            << ", ball="
-           << (ball ? "none"
-                    : (std::to_string(ball->pos_rel.x) + ", " + std::to_string(ball->pos_rel.y) +
-                       ", ball_age_us=" + std::to_string(ball->ball_age_us)))
+           << (ball ? (std::to_string(ball->pos_rel.x) + ", " +
+                       std::to_string(ball->pos_rel.y) +
+                       ", ball_age_us=" + std::to_string(ball->ball_age_us))
+                    : "none")
            << ", sent_time_us=" << sent_time_us
            << ", striker_request_time_us=" << striker_request_time_us << ")";
         return ss.str();
