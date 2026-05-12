@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
     //  }
 
     // default values
-    int team_id = 44;
+    int team_id = 63;  // WHU United
     int player_id = 1;
     bool real_gc = false;
     bool gc_flag = false;

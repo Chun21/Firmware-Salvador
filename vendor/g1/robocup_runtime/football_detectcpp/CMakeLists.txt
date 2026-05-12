@@ -50,8 +50,31 @@ ${OpenCV_INCLUDE_DIRS}
 
 
 find_package(realsense2 REQUIRED)
+find_package(Threads REQUIRED)
 
-find_package(unitree_sdk2 REQUIRED)
+set(UNITREE_SDK2_ROOT "" CACHE PATH "Path to vendored Unitree SDK2")
+if(NOT UNITREE_SDK2_ROOT AND DEFINED ENV{UNITREE_SDK2_ROOT})
+    set(UNITREE_SDK2_ROOT "$ENV{UNITREE_SDK2_ROOT}")
+endif()
+
+if(UNITREE_SDK2_ROOT)
+    message(STATUS "Using vendored Unitree SDK2: ${UNITREE_SDK2_ROOT}")
+    include_directories(
+        ${UNITREE_SDK2_ROOT}/include
+        ${UNITREE_SDK2_ROOT}/thirdparty/include
+        ${UNITREE_SDK2_ROOT}/thirdparty/include/ddscxx
+    )
+    link_directories(
+        ${UNITREE_SDK2_ROOT}/lib/aarch64
+        ${UNITREE_SDK2_ROOT}/thirdparty/lib/aarch64
+    )
+    set(UNITREE_SDK2_LIB ${UNITREE_SDK2_ROOT}/lib/aarch64/libunitree_sdk2.a)
+    set(UNITREE_SDK2_DEPS ddsc ddscxx Threads::Threads rt dl)
+else()
+    find_package(unitree_sdk2 REQUIRED)
+    set(UNITREE_SDK2_LIB unitree_sdk2)
+    set(UNITREE_SDK2_DEPS Threads::Threads rt dl)
+endif()
 
 # Include TensorRT
 # Set TensorRT path if not set in environment variables
@@ -70,11 +93,13 @@ target_link_libraries(${PROJECT_NAME}
     ${CUDA_LIBRARIES}
     ${TENSORRT_LIBS}
     realsense2::realsense2
-    unitree_sdk2
+    ${UNITREE_SDK2_LIB}
+    ${UNITREE_SDK2_DEPS}
 )
 
 cuda_add_executable(sub sub.cpp src/DetectionModule.cpp src/DetectionModule.hpp )
 
 target_link_libraries(sub
-    unitree_sdk2
+    ${UNITREE_SDK2_LIB}
+    ${UNITREE_SDK2_DEPS}
 )

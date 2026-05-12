@@ -486,6 +486,7 @@ int main(int argc, char** argv) {
     const double marker_alpha = EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_ALPHA", 0.12);
     const double marker_timeout_sec = EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_TIMEOUT_SEC", 1.0);
     const bool use_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_USE_RGBD", true);
+    const bool init_from_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_INIT_FROM_RGBD", true);
     const bool use_robot_odom = EnvBoolOrDefault("ROBOCUP_FUSION_USE_ROBOT_ODOM", true);
     const double odom_scale_factor = EnvDoubleOrDefault("ROBOCUP_ODOM_SCALE_FACTOR", 1.4);
     const double odom_min_translation_m = EnvDoubleOrDefault("ROBOCUP_FUSION_ODOM_MIN_TRANSLATION_M", 0.001);
@@ -505,6 +506,7 @@ int main(int argc, char** argv) {
               << " robot_id=" << robot_id
               << " marker_alpha=" << marker_alpha
               << " use_rgbd=" << (use_rgbd ? "1" : "0")
+              << " init_from_rgbd=" << (init_from_rgbd ? "1" : "0")
               << " use_robot_odom=" << (use_robot_odom ? "1" : "0")
               << " odom_scale_factor=" << odom_scale_factor
               << std::endl;
@@ -574,10 +576,16 @@ int main(int argc, char** argv) {
             const auto curr_rgbd = sample.data();
             // RGB-D is treated only as an odometry/increment source here.
             // It is deliberately not allowed to initialize the field-frame pose.
-            if (use_rgbd && has_fused && has_prev_rgbd) {
-                ApplyOdometryIncrement(prev_rgbd, curr_rgbd, fused_pose);
-                applied_rgbd_prediction = true;
-                AddSource(cycle_source, "RGBD_ODOM");
+            if (use_rgbd) {
+                if (!has_fused && init_from_rgbd) {
+                    fused_pose = curr_rgbd;
+                    has_fused = true;
+                    AddSource(cycle_source, "RGBD_INIT");
+                } else if (has_fused && has_prev_rgbd) {
+                    ApplyOdometryIncrement(prev_rgbd, curr_rgbd, fused_pose);
+                    applied_rgbd_prediction = true;
+                    AddSource(cycle_source, "RGBD_ODOM");
+                }
             }
             prev_rgbd = curr_rgbd;
             has_prev_rgbd = true;

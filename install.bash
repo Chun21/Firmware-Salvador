@@ -27,6 +27,414 @@ fix_ssh_key_file_permissions() {
 	done
 }
 
+write_g1_runtime_scripts() {
+    local deploy_dir="$1"
+
+    mkdir -p "$deploy_dir"
+
+    cat > "$deploy_dir/run_g1_salvador_only.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$DEPLOY_DIR/lib"
+LOADER="$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+REAL_BIN="$DEPLOY_DIR/bin/fw_salvador.real"
+
+cd "$DEPLOY_DIR"
+export G1_NETWORK_INTERFACE="${G1_NETWORK_INTERFACE:-eth0}"
+export LD_LIBRARY_PATH="$LIB_DIR:${LD_LIBRARY_PATH:-}"
+
+FW_ARGS=("$@")
+HAS_GC=0
+for arg in "${FW_ARGS[@]}"; do
+  case "$arg" in
+    --gc|--gc3|--real_gamecontroller|--no-gc)
+      HAS_GC=1
+      ;;
+  esac
+done
+if [[ "$HAS_GC" == "0" ]]; then
+  FW_ARGS=(--gc "${FW_ARGS[@]}")
+fi
+
+if [[ -x "$LOADER" ]]; then
+  exec "$LOADER" --library-path "$LIB_DIR:${LD_LIBRARY_PATH:-}" "$REAL_BIN" "${FW_ARGS[@]}"
+else
+  exec "$REAL_BIN" "${FW_ARGS[@]}"
+fi
+EOF
+    chmod +x "$deploy_dir/run_g1_salvador_only.sh"
+
+    cat > "$deploy_dir/stop_g1_stack.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="${G1_NETWORK_INTERFACE:-eth0}"
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "[g1-stop] stopping G1 perception/localization stack on iface=$IFACE"
+pkill -TERM -f "[f]ootball_detect .* $IFACE" 2>/dev/null || true
+pkill -TERM -f "[t]est_location $IFACE " 2>/dev/null || true
+pkill -TERM -f "[l]ocation_fusion $IFACE" 2>/dev/null || true
+pkill -TERM -f "$DEPLOY_DIR/bin/[f]w_salvador.real" 2>/dev/null || true
+sudo -n pkill -TERM -f "[.]/main $IFACE --serial" 2>/dev/null || true
+sleep 0.8
+pkill -KILL -f "[f]ootball_detect .* $IFACE" 2>/dev/null || true
+pkill -KILL -f "[t]est_location $IFACE " 2>/dev/null || true
+pkill -KILL -f "[l]ocation_fusion $IFACE" 2>/dev/null || true
+pkill -KILL -f "$DEPLOY_DIR/bin/[f]w_salvador.real" 2>/dev/null || true
+sudo -n pkill -KILL -f "[.]/main $IFACE --serial" 2>/dev/null || true
+echo "[g1-stop] done"
+EOF
+    chmod +x "$deploy_dir/stop_g1_stack.sh"
+
+    cat > "$deploy_dir/run_g1.sh" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# One-key G1 launcher for Firmware-Salvador.
+# By default it starts the vendored G1 perception/localization runtime packaged
+# inside this Firmware-Salvador deploy directory:
+#   g1_perception/g1_comp_servo_service -> football_detect(RealSense + YOLO)
+#   -> marker_locator -> location_fusion -> fw_salvador
+#
+# Useful overrides:
+#   G1_NETWORK_INTERFACE=eth0 ./run_g1.sh
+#   FW_G1_PERCEPTION=0 ./run_g1.sh          # only start Salvador
+#   ./run_g1.sh --salvador-only             # only start Salvador
+#   DETECT_DISPLAY=1 MARKER_DISPLAY=1 ./run_g1.sh
+
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$DEPLOY_DIR/lib"
+LOADER="$LIB_DIR/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+REAL_BIN="$DEPLOY_DIR/bin/fw_salvador.real"
+
+IFACE="${G1_NETWORK_INTERFACE:-eth0}"
+DETECT_DISPLAY="${DETECT_DISPLAY:-0}"
+MARKER_DISPLAY="${MARKER_DISPLAY:-0}"
+FW_G1_PERCEPTION="${FW_G1_PERCEPTION:-1}"
+ROBOCUP_SERVO_SERIAL="${ROBOCUP_SERVO_SERIAL:-}"
+ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+SALVADOR_LD_LIBRARY_PATH="$LIB_DIR${ORIGINAL_LD_LIBRARY_PATH:+:$ORIGINAL_LD_LIBRARY_PATH}"
+RUNTIME_LD_LIBRARY_PATH="$ORIGINAL_LD_LIBRARY_PATH"
+
+FW_ARGS=()
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --salvador-only|--no-perception)
+      FW_G1_PERCEPTION=0
+      shift
+      ;;
+    --iface=*)
+      IFACE="${1#--iface=}"
+      shift
+      ;;
+    --detect-display)
+      DETECT_DISPLAY=1
+      shift
+      ;;
+    --marker-display)
+      MARKER_DISPLAY=1
+      shift
+      ;;
+    *)
+      FW_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+export G1_NETWORK_INTERFACE="$IFACE"
+
+HAS_GC=0
+for arg in "${FW_ARGS[@]}"; do
+  case "$arg" in
+    --gc|--gc3|--real_gamecontroller|--no-gc)
+      HAS_GC=1
+      ;;
+  esac
+done
+if [[ "$HAS_GC" == "0" ]]; then
+  FW_ARGS=(--gc "${FW_ARGS[@]}")
+fi
+
+build_runtime_if_needed() {
+  local root="$1"
+
+  local servo_bin="$root/g1_comp_servo_service/build/main"
+  local detect_bin="$root/football_detectcpp/build/football_detect"
+  local marker_bin="$root/robocup_locator_v1.1/build/test_location"
+  local fusion_bin="$root/robocup_locator_v1.1/build/location_fusion"
+
+  if [[ -x "$servo_bin" && -x "$detect_bin" && -x "$marker_bin" && -x "$fusion_bin" ]]; then
+    return
+  fi
+
+  if [[ "${FW_G1_AUTOBUILD_PERCEPTION:-1}" != "1" ]]; then
+    return
+  fi
+
+  if [[ ! -x "$root/compile_runtime_on_robot.sh" ]]; then
+    return
+  fi
+
+  echo "[g1] perception binaries missing; building vendored runtime inside this project..."
+  env LD_LIBRARY_PATH="$ORIGINAL_LD_LIBRARY_PATH" "$root/compile_runtime_on_robot.sh"
+}
+
+source_g1_runtime_env() {
+  local root="$1"
+  local env_ld_library_path="$ORIGINAL_LD_LIBRARY_PATH"
+  if [[ -f "$root/robocup_env.sh" ]]; then
+    echo "[g1] source env: $root/robocup_env.sh"
+    # shellcheck disable=SC1090
+    source "$root/robocup_env.sh"
+    env_ld_library_path="${LD_LIBRARY_PATH:-$ORIGINAL_LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="$ORIGINAL_LD_LIBRARY_PATH"
+  fi
+
+  SALVADOR_LD_LIBRARY_PATH="$LIB_DIR${ORIGINAL_LD_LIBRARY_PATH:+:$ORIGINAL_LD_LIBRARY_PATH}"
+  RUNTIME_LD_LIBRARY_PATH="$root/g1_comp_servo_service/lib/arm:$root/unitree_sdk2/thirdparty/lib/aarch64:$root/unitree_sdk2/lib/aarch64:$root/g1_comp_servo_service/build:$root/football_detectcpp/build:$root/robocup_locator_v1.1/build${env_ld_library_path:+:$env_ld_library_path}"
+}
+
+require_file() {
+  if [[ ! -e "$1" ]]; then
+    echo "[g1][ERROR] missing: $1" >&2
+    exit 1
+  fi
+}
+
+is_alive() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null || sudo -n kill -0 "$pid" 2>/dev/null
+}
+
+detect_servo_serial() {
+  if [[ -n "${ROBOCUP_SERVO_SERIAL:-}" && -e "${ROBOCUP_SERVO_SERIAL:-}" ]]; then
+    printf '%s' "$ROBOCUP_SERVO_SERIAL"
+    return 0
+  fi
+  if [[ -e /dev/ttyUSB0 ]]; then
+    printf '/dev/ttyUSB0'
+    return 0
+  fi
+  local dev
+  for dev in /dev/ttyUSB* /dev/ttyACM*; do
+    if [[ -e "$dev" ]]; then
+      printf '%s' "$dev"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PIDS=()
+NAMES=()
+TAIL_PID=""
+RUN_ID="$(/bin/date +%Y%m%d_%H%M%S 2>/dev/null || true)"
+if [[ -z "$RUN_ID" ]]; then
+  RUN_ID="pid_$$"
+fi
+LOG_DIR="$DEPLOY_DIR/logs/g1_stack_$RUN_ID"
+
+cleanup() {
+  local code=$?
+  set +e
+  echo
+  echo "[g1] stopping ${#PIDS[@]} processes..."
+  if [[ -n "$TAIL_PID" ]]; then
+    kill "$TAIL_PID" 2>/dev/null || true
+  fi
+  local pid
+  for pid in "${PIDS[@]}"; do
+    if is_alive "$pid"; then
+      kill -- "-$pid" 2>/dev/null || true
+      kill "$pid" 2>/dev/null || true
+      sudo -n kill -- "-$pid" 2>/dev/null || true
+      sudo -n kill "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 1
+  for pid in "${PIDS[@]}"; do
+    if is_alive "$pid"; then
+      kill -9 -- "-$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true
+      sudo -n kill -9 -- "-$pid" 2>/dev/null || true
+      sudo -n kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+  pkill -TERM -f "[f]ootball_detect .* $IFACE" 2>/dev/null || true
+  pkill -TERM -f "[t]est_location $IFACE " 2>/dev/null || true
+  pkill -TERM -f "[l]ocation_fusion $IFACE" 2>/dev/null || true
+  sudo -n pkill -TERM -f "[.]/main $IFACE --serial" 2>/dev/null || true
+  sleep 0.5
+  pkill -KILL -f "[f]ootball_detect .* $IFACE" 2>/dev/null || true
+  pkill -KILL -f "[t]est_location $IFACE " 2>/dev/null || true
+  pkill -KILL -f "[l]ocation_fusion $IFACE" 2>/dev/null || true
+  sudo -n pkill -KILL -f "[.]/main $IFACE --serial" 2>/dev/null || true
+  echo "[g1] logs: $LOG_DIR"
+  exit "$code"
+}
+trap cleanup INT TERM EXIT
+
+start_bg() {
+  local name="$1"
+  local workdir="$2"
+  shift 2
+  local log="$LOG_DIR/${name}.log"
+
+  echo "[g1] start $name"
+  echo "     cwd: $workdir"
+  echo "     log: $log"
+  (
+    cd "$workdir"
+    echo "===== $name started at $(date) ====="
+    echo "cwd=$(pwd)"
+    echo "cmd=$*"
+    exec "$@"
+  ) >"$log" 2>&1 &
+
+  local pid=$!
+  PIDS+=("$pid")
+  NAMES+=("$name")
+  sleep 1
+  if ! is_alive "$pid"; then
+    echo "[g1][ERROR] $name exited immediately. Check log: $log" >&2
+    exit 1
+  fi
+}
+
+run_firmware_cmd() {
+  if [[ -x "$LOADER" ]]; then
+    "$LOADER" --library-path "$SALVADOR_LD_LIBRARY_PATH" "$REAL_BIN" "${FW_ARGS[@]}"
+  else
+    env LD_LIBRARY_PATH="$SALVADOR_LD_LIBRARY_PATH" "$REAL_BIN" "${FW_ARGS[@]}"
+  fi
+}
+
+mkdir -p "$LOG_DIR"
+cd "$DEPLOY_DIR"
+
+if [[ "$FW_G1_PERCEPTION" != "1" ]]; then
+  echo "[g1] perception disabled; starting Salvador only."
+  exec "$DEPLOY_DIR/run_g1_salvador_only.sh" "${FW_ARGS[@]}"
+fi
+
+ROBOCUP_ROOT="$DEPLOY_DIR/g1_perception"
+if [[ ! -d "$ROBOCUP_ROOT" ]]; then
+  cat >&2 <<ERROR
+[g1][ERROR] vendored G1 perception runtime not found: $ROBOCUP_ROOT
+Re-run ./install.bash --g1 so Firmware-Salvador packages vendor/g1/robocup_runtime into deploy/g1_perception.
+ERROR
+  exit 1
+fi
+
+source_g1_runtime_env "$ROBOCUP_ROOT"
+build_runtime_if_needed "$ROBOCUP_ROOT"
+
+SERVO_BIN="$ROBOCUP_ROOT/g1_comp_servo_service/build/main"
+DETECT_BIN="$ROBOCUP_ROOT/football_detectcpp/build/football_detect"
+YOLO_ENGINE="$ROBOCUP_ROOT/football_detectcpp/weight/weight.engine"
+MARKER_BIN="$ROBOCUP_ROOT/robocup_locator_v1.1/build/test_location"
+FUSION_BIN="$ROBOCUP_ROOT/robocup_locator_v1.1/build/location_fusion"
+LOC_CONFIG="$ROBOCUP_ROOT/robocup_locator_v1.1/config.yaml"
+
+require_file "$SERVO_BIN"
+require_file "$DETECT_BIN"
+require_file "$YOLO_ENGINE"
+require_file "$MARKER_BIN"
+require_file "$FUSION_BIN"
+require_file "$LOC_CONFIG"
+require_file "$REAL_BIN"
+
+if [[ -z "$ROBOCUP_SERVO_SERIAL" ]]; then
+  ROBOCUP_SERVO_SERIAL="$(detect_servo_serial || true)"
+fi
+if [[ -z "$ROBOCUP_SERVO_SERIAL" || ! -e "$ROBOCUP_SERVO_SERIAL" ]]; then
+  echo "[g1][ERROR] servo serial device not found. Set ROBOCUP_SERVO_SERIAL=/dev/ttyUSBx." >&2
+  exit 1
+fi
+
+cat <<INFO
+[g1] deploy: $DEPLOY_DIR
+[g1] g1_perception: $ROBOCUP_ROOT
+[g1] iface: $IFACE
+[g1] logs: $LOG_DIR
+[g1] detect_display=$DETECT_DISPLAY marker_display=$MARKER_DISPLAY
+[g1] servo_serial=$ROBOCUP_SERVO_SERIAL
+[g1] fw_args=${FW_ARGS[*]}
+INFO
+
+echo "[g1] checking sudo permission for servo service..."
+sudo -v
+
+echo "[g1] cleanup stale perception/localization processes..."
+"$DEPLOY_DIR/stop_g1_stack.sh" || true
+
+start_bg servo_service \
+  "$ROBOCUP_ROOT/g1_comp_servo_service/build" \
+  sudo env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ROBOCUP_SERVO_CONFIG="${ROBOCUP_SERVO_CONFIG:-../config/config.yaml}" ./main "$IFACE" --serial "$ROBOCUP_SERVO_SERIAL"
+sleep 2
+
+start_bg football_detect \
+  "$ROBOCUP_ROOT/football_detectcpp/build" \
+  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./football_detect ../weight/weight.engine "$DETECT_DISPLAY" "$IFACE"
+sleep 3
+
+start_bg marker_locator \
+  "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
+  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./test_location "$IFACE" ../config.yaml "$MARKER_DISPLAY"
+sleep 2
+
+start_bg location_fusion \
+  "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
+  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./location_fusion "$IFACE"
+sleep 2
+
+FW_LOG="$LOG_DIR/fw_salvador.log"
+echo "[g1] start fw_salvador"
+echo "     log: $FW_LOG"
+(
+  cd "$DEPLOY_DIR"
+  echo "===== fw_salvador started at $(date) ====="
+  echo "cwd=$(pwd)"
+  echo "cmd=$REAL_BIN ${FW_ARGS[*]}"
+  run_firmware_cmd
+) >"$FW_LOG" 2>&1 &
+PIDS+=("$!")
+NAMES+=("fw_salvador")
+sleep 1
+if ! is_alive "${PIDS[-1]}"; then
+  echo "[g1][ERROR] fw_salvador exited immediately. Check log: $FW_LOG" >&2
+  exit 1
+fi
+
+echo
+echo "[g1] stack started. Following fw_salvador log; press Ctrl-C to stop all modules."
+echo "[g1] other logs:"
+echo "  tail -f $LOG_DIR/football_detect.log"
+echo "  tail -f $LOG_DIR/marker_locator.log"
+echo "  tail -f $LOG_DIR/location_fusion.log"
+echo
+tail -n +1 -F "$FW_LOG" &
+TAIL_PID="$!"
+
+while true; do
+  for i in "${!PIDS[@]}"; do
+    pid="${PIDS[$i]}"
+    name="${NAMES[$i]}"
+    if ! is_alive "$pid"; then
+      echo "[g1][ERROR] process exited: $name pid=$pid log=$LOG_DIR/${name}.log" >&2
+      exit 1
+    fi
+  done
+  sleep 2
+done
+EOF
+    chmod +x "$deploy_dir/run_g1.sh"
+}
+
 LOCAL_DIR=$(pwd)
 
 # Docker image configuration
@@ -398,6 +806,12 @@ if [ $DEPLOY_ONLY = false ] ; then
                 fi
             done
             find /l4t/targetfs -name 'libtinyxml2.so.9*' -exec cp -a {} /install/lib/ \\; 2>/dev/null || true
+            if ! ls /install/lib/libtinyxml2.so.9* >/dev/null 2>&1; then
+                cp -a ${LOCAL_DIR}/vendor/g1/aarch64_libs/tinyxml2/libtinyxml2.so.9* /install/lib/ 2>/dev/null || true
+            fi
+            if [ -f /install/lib/libtinyxml2.so.9.0.0 ] && [ ! -e /install/lib/libtinyxml2.so.9 ]; then
+                ln -sf libtinyxml2.so.9.0.0 /install/lib/libtinyxml2.so.9
+            fi
             for boost_lib in \
                 libboost_program_options \
                 libboost_filesystem \
@@ -459,6 +873,25 @@ EOF
         fi
     "
     check_success "Build process"
+
+    if [ "$ROBOT_MODEL" = "g1" ]; then
+        echo "Packaging vendored G1 perception runtime into ${DEPLOY_PATH}/g1_perception ..."
+        docker run --rm --network host -v $LOCAL_DIR:$LOCAL_DIR $CONTAINER_NAME bash -c "
+           chown -R $USER_ID:$GROUP_ID $LOCAL_DIR/$DEPLOY_PATH
+        "
+        rm -rf "${DEPLOY_PATH}/g1_perception"
+        mkdir -p "${DEPLOY_PATH}/g1_perception"
+        rsync -a --delete \
+            --exclude '*/build/' \
+            --exclude '.git/' \
+            --exclude '.pytest_cache/' \
+            "vendor/g1/robocup_runtime/" "${DEPLOY_PATH}/g1_perception/"
+        rsync -a --delete \
+            --exclude '.git/' \
+            "vendor/g1/unitree_sdk2/" "${DEPLOY_PATH}/g1_perception/unitree_sdk2/"
+        write_g1_runtime_scripts "${DEPLOY_PATH}"
+        check_success "Packaged G1 perception runtime"
+    fi
 
     docker run --rm --network host -v $LOCAL_DIR:$LOCAL_DIR $CONTAINER_NAME bash -c "
            chown -R $USER_ID:$GROUP_ID $LOCAL_DIR

@@ -2,7 +2,7 @@
 
 本文件是后续 agent 在本仓库写代码时必须优先阅读和遵守的入口规范。  
 G1 RoboCup 支持的总体方案见 `PLAN.md`；更细的规范见 `agent_guidelines/`。
-
+裁判盒代码在/home/chunyu/programs/GameController
 ## 必读顺序
 
 1. `PLAN.md`：确认 G1 支持的阶段目标和总体架构。
