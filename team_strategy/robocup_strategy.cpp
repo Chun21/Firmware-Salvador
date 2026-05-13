@@ -25,6 +25,20 @@ using namespace std;
 
 namespace {
 
+#ifdef ROBOT_MODEL_G1
+constexpr int64_t kG1BallInfoTtl = 3_s;
+
+bool freshOwnBall(const Myself& robot, int64_t now, int64_t ttl) {
+    return robot.ball && !robot.penalized && robot.loc.quality >= 0.7f &&
+           now - robot.ball->last_seen_time <= ttl;
+}
+
+bool freshTeamBall(const TeamComData& robot, int64_t now, int64_t ttl) {
+    return robot.ball && robot.loc_quality >= 0.7f && !robot.is_fallen &&
+           now - robot.sent_time_us + robot.ball->ball_age_us <= ttl;
+}
+#endif
+
 float dribbleWalkingTime(const htwk::Position& robot, const point_2d& abs_ball) {
     htwk::Position target = htwk::Position(abs_ball, dribblingDirection(abs_ball).to_direction());
     return walkingTime(robot, target, true);
@@ -190,6 +204,50 @@ point_2d RobocupStrategy::globalBall(int64_t min_time) {
     return global_ball;
 }
 
+#ifdef ROBOT_MODEL_G1
+std::optional<point_2d> RobocupStrategy::globalBallWithTtl(int64_t ttl) {
+    const int64_t now = time_us();
+
+    if (freshOwnBall(myself, now, ttl)) {
+        point_2d global_ball =
+                LocalizationUtils::relToAbs(myself.ball->pos_rel, myself.loc.position);
+        last_seen_ball = global_ball;
+        last_seen_ball_time = now;
+        return global_ball;
+    }
+
+    auto useTeamBall = [&](const TeamComData& robot) {
+        point_2d global_ball = LocalizationUtils::relToAbs(robot.ball->pos_rel, robot.pos);
+        last_seen_ball = global_ball;
+        last_seen_ball_time = now;
+        return global_ball;
+    };
+
+    if (cur_striker && robots.contains(*cur_striker) &&
+        freshTeamBall(robots[*cur_striker], now, ttl)) {
+        return useTeamBall(robots[*cur_striker]);
+    }
+
+    float ball_dist = numeric_limits<float>::infinity();
+    PlayerIdx ball_idx = 255;
+    for (const auto& [idx, bot] : robots) {
+        if (freshTeamBall(bot, now, ttl) && bot.ball->pos_rel.norm() < ball_dist) {
+            ball_dist = bot.ball->pos_rel.norm();
+            ball_idx = idx;
+        }
+    }
+    if (ball_idx != 255) {
+        return useTeamBall(robots[ball_idx]);
+    }
+
+    if (last_seen_ball && now - last_seen_ball_time <= ttl) {
+        return last_seen_ball;
+    }
+
+    return std::nullopt;
+}
+#endif
+
 void RobocupStrategy::simulate_positions(int num_robots, const point_2d& ball) {
     position_by_role.clear();
     for (int n = 0; n < num_robots; n++) {
@@ -254,7 +312,8 @@ void RobocupStrategy::determineStriker(std::optional<point_2d> striker_pos, bool
 }
 
 bool RobocupStrategy::isRogueStriker() {
-    if (!cur_striker || *cur_striker == myself.idx || !strikerQualityBall(robots[*cur_striker]))
+    if (!cur_striker || *cur_striker == myself.idx || !myself.ball ||
+        !strikerQualityBall(robots[*cur_striker]))
         return false;
     float cur_striker_ball_dist_diff =
             robots[*cur_striker].pos.point().dist(
@@ -287,7 +346,8 @@ bool RobocupStrategy::isStupidStriker(point_2d global_ball) {
             return true;
         }
     }
-    if (!cur_striker || *cur_striker == myself.idx || strikerQualityBall(robots[*cur_striker]))
+    if (!cur_striker || *cur_striker == myself.idx || strikerQualityBall(robots[*cur_striker]) ||
+        !robots[*cur_striker].ball)
         return false;
     float stupid_ball_dist = dribbleWalkingTime(
             myself.loc.position, LocalizationUtils::relToAbs(robots[*cur_striker].ball->pos_rel,
@@ -312,7 +372,12 @@ shared_ptr<Order> RobocupStrategy::play() {
     if (cur_striker && *cur_striker != myself.idx)
         tc_manager.resetStrikerRequest();
     bool rogue_striker = isRogueStriker();
+#ifdef ROBOT_MODEL_G1
+    std::optional<point_2d> fresh_global_ball = globalBallWithTtl(kG1BallInfoTtl);
+    point_2d global_ball = fresh_global_ball.value_or(middle_point);
+#else
     point_2d global_ball = globalBall();
+#endif
     bool stupid_striker = isStupidStriker(global_ball);
 
     if (play_state == PlayState::WAITING_FOR_OWN_KICKOFF) {
@@ -335,7 +400,19 @@ shared_ptr<Order> RobocupStrategy::play() {
     if (penalized || returning_from_penalty)
         return order;
 
+#ifdef ROBOT_MODEL_G1
+    if (cur_striker) {
+        TeamComData striker_data = robots[*cur_striker];
+        if (!freshTeamBall(striker_data, time_us(), kG1BallInfoTtl)) {
+            striker_data.ball.reset();
+        }
+        striker_channel.publish(std::make_optional(striker_data));
+    } else {
+        striker_channel.publish(std::nullopt);
+    }
+#else
     striker_channel.publish(cur_striker ? std::make_optional(robots[*cur_striker]) : std::nullopt);
+#endif
 
     if (play_state == PlayState::WAITING_FOR_OPP_KICKOFF ||
         play_state == PlayState::WAITING_FOR_OPP_SETPLAY) {
@@ -358,6 +435,13 @@ shared_ptr<Order> RobocupStrategy::play() {
                                                myself.idx == 0 ? true : false, HeadFocus::NOTHING);
         return NoOrder::create();
     }
+
+#ifdef ROBOT_MODEL_G1
+    if (play_state == PlayState::PLAYING && !fresh_global_ball) {
+        return WalkToPositionOrder::create(myself.loc.position, WalkToPositionOrder::Mode::STRIKER,
+                                           false, HeadFocus::BALL);
+    }
+#endif
 
     simulate_positions(robots.size(), global_ball);
     distributePositions();

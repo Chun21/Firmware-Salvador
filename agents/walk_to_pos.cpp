@@ -3,11 +3,23 @@
 #include <localization_utils.h>
 
 #include "keepgoalorder.h"
+#include "logging.h"
 #include "moveballgoalorder.h"
 #include "walktopositionorder.h"
 
 using namespace htwk;
 using namespace std;
+
+namespace {
+
+#ifdef ROBOT_MODEL_G1
+constexpr float kPreciseWalkToPositionAccuracy = 0.3f;
+int64_t last_g1_ready_unstable_loc_log_us = 0;
+#else
+constexpr float kPreciseWalkToPositionAccuracy = 0.1f;
+#endif
+
+}  // namespace
 
 htwk::Position WalkToPositionAgent::handelHeadAngle(htwk::Position order_pos,
                                                     WalkToPositionOrder::Mode order_mode,
@@ -61,6 +73,21 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
     if (!current_pos) {
         return MotionCommand::Nothing;
     }
+#ifdef ROBOT_MODEL_G1
+    if (gc_state_sub.latest().state == GameState::Ready && current_pos->quality < 0.7f) {
+        const int64_t now = time_us();
+        if (now - last_g1_ready_unstable_loc_log_us > 1_s) {
+            LOG_F(WARNING,
+                  "G1 Ready walk blocked until localization is stable: pos=(%.2f, %.2f, %.1fdeg) "
+                  "quality=%.2f",
+                  current_pos->position.x, current_pos->position.y,
+                  current_pos->position.a * 180.0f / static_cast<float>(M_PI),
+                  current_pos->quality);
+            last_g1_ready_unstable_loc_log_us = now;
+        }
+        return MotionCommand::Stand(HeadFocus::LOC);
+    }
+#endif
     for (const auto& robot : rel_robots) {
         obstacles.push_back(vectorfield::Influencer{
                 .position = LocalizationUtils::relToAbs(robot.pos_rel, current_pos->position),
@@ -107,7 +134,7 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
         accuracy = 0.2f;
     if (isOrder<WalkToPositionOrder>(order) &&
         dynamic_cast<WalkToPositionOrder*>(order.get())->precise)
-        accuracy = 0.1f;
+        accuracy = kPreciseWalkToPositionAccuracy;
     if ((dest - current_pos->position).weightedNorm(1.f) < accuracy) {
         return MotionCommand::Stand(focus);
     }

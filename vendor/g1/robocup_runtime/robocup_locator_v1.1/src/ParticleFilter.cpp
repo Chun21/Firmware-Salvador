@@ -198,7 +198,8 @@ double ParticleFilter::residual(vector<FieldMarker> markers_r, Pose2D pose)
         double dist = max(norm(marker_r.x, marker_r.y), 0.1);
         auto marker_f = markerToFieldFrame(marker_r, pose);
         double conf = max(marker_r.confidence, 0.1);
-        res += minDist(marker_f) * conf / 100.0 / dist * 3;
+        double distanceScale = max(pow(dist, residualDistancePower), 0.1);
+        res += minDist(marker_f) * conf / 100.0 / distanceScale * 3;
     }
 
     return res;

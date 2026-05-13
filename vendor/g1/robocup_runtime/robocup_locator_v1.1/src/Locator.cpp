@@ -68,6 +68,17 @@ void Locator::init(YamlParser _config) {
 
     pf_locator = std::make_shared<ParticleFilter>();
     pf_locator -> init(fd, 3, 0.25, 0.5);
+    pf_locator->minMarkerCnt = EnvDoubleOrDefault("ROBOCUP_MARKER_MIN_COUNT", 3.0);
+    pf_locator->residualTolerance =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_RESIDUAL_TOLERANCE", 0.35);
+    pf_locator->convergeTolerance =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_CONVERGE_TOLERANCE", 0.30);
+    pf_locator->residualDistancePower =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_RESIDUAL_DISTANCE_POWER", 0.70);
+    std::cout << "[Locator] thresholds min_marker_count=" << pf_locator->minMarkerCnt
+              << " residual_tolerance=" << pf_locator->residualTolerance
+              << " converge_tolerance=" << pf_locator->convergeTolerance
+              << " residual_distance_power=" << pf_locator->residualDistancePower << std::endl;
 
     display_board = std::make_shared<DisplayBoard>();
     display_board->init(fd);
@@ -75,7 +86,13 @@ void Locator::init(YamlParser _config) {
 
 void Locator::detectProcessMarkings(const vector<GameObject> &markingObjs)
 {
-    const double confidenceValve = 0.1;
+    const double confidenceValve = EnvDoubleOrDefault("ROBOCUP_MARKER_MIN_CONFIDENCE", 40.0);
+    const double farConfidenceStart =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_FAR_CONFIDENCE_START_M", 3.0);
+    const double farConfidenceSlope =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_FAR_CONFIDENCE_SLOPE", 5.0);
+    const double farConfidenceMax =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_FAR_CONFIDENCE_MAX", 65.0);
 
     markings.clear();
 
@@ -83,7 +100,11 @@ void Locator::detectProcessMarkings(const vector<GameObject> &markingObjs)
     {
         auto marking = markingObjs[i];
 
-        if (marking.confidence < confidenceValve)
+        const double dynamicConfidenceValve = std::min(
+            farConfidenceMax,
+            confidenceValve +
+                std::max(0.0, marking.range - farConfidenceStart) * farConfidenceSlope);
+        if (marking.confidence < dynamicConfidenceValve)
             continue;
 
         if (marking.posToRobot.x < -0.5 || marking.posToRobot.x > 12.0)

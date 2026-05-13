@@ -55,6 +55,9 @@ private:
 
     std::shared_ptr<Order> handlePenaltyReturn();
     point_2d globalBall(int64_t min_time = 0);
+#ifdef ROBOT_MODEL_G1
+    std::optional<point_2d> globalBallWithTtl(int64_t ttl);
+#endif
     bool isBallFreeInKickoff(const TeamComData& robot);
     bool isBallFreeInKickoff(const Myself& robot);
     bool isBallFreeInSetPlay(const Myself& robot);

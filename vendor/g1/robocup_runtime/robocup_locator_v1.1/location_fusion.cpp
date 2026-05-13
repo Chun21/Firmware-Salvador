@@ -198,6 +198,14 @@ double WrapRad(double angle) {
     return angle;
 }
 
+double DegToRad(double deg) {
+    return deg * M_PI / 180.0;
+}
+
+double RadToDeg(double rad) {
+    return rad * 180.0 / M_PI;
+}
+
 double PoseX(const LocationModule::LocationResult& pose) {
     return static_cast<double>(pose.robot2field_x());
 }
@@ -463,6 +471,23 @@ void SmoothTowardMarker(
     SetPose(fused, x, y, theta);
 }
 
+bool MarkerCorrectionAllowed(
+    const LocationModule::LocationResult& marker,
+    const LocationModule::LocationResult& fused,
+    double max_translation_m,
+    double max_rotation_rad) {
+    if (max_translation_m < 0.0 && max_rotation_rad < 0.0) {
+        return true;
+    }
+    const double dx = PoseX(marker) - PoseX(fused);
+    const double dy = PoseY(marker) - PoseY(fused);
+    const double translation = std::hypot(dx, dy);
+    const double rotation = std::fabs(WrapRad(PoseTheta(marker) - PoseTheta(fused)));
+    const bool translation_ok = max_translation_m < 0.0 || translation <= max_translation_m;
+    const bool rotation_ok = max_rotation_rad < 0.0 || rotation <= max_rotation_rad;
+    return translation_ok && rotation_ok;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -483,8 +508,12 @@ int main(int argc, char** argv) {
     TeamBallUdpSender team_ball_sender = OpenTeamBallSender(team_iface);
 
     const double publish_period_ms = EnvDoubleOrDefault("ROBOCUP_FUSION_PERIOD_MS", 20.0);
-    const double marker_alpha = EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_ALPHA", 0.12);
+    const double marker_alpha = EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_ALPHA", 0.05);
     const double marker_timeout_sec = EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_TIMEOUT_SEC", 1.0);
+    const double marker_max_correction_m =
+        EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M", 0.7);
+    const double marker_max_correction_rad =
+        DegToRad(EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG", 40.0));
     const bool use_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_USE_RGBD", true);
     const bool init_from_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_INIT_FROM_RGBD", true);
     const bool use_robot_odom = EnvBoolOrDefault("ROBOCUP_FUSION_USE_ROBOT_ODOM", true);
@@ -505,6 +534,8 @@ int main(int argc, char** argv) {
               << " team_id=" << team_id
               << " robot_id=" << robot_id
               << " marker_alpha=" << marker_alpha
+              << " marker_max_correction_m=" << marker_max_correction_m
+              << " marker_max_correction_deg=" << RadToDeg(marker_max_correction_rad)
               << " use_rgbd=" << (use_rgbd ? "1" : "0")
               << " init_from_rgbd=" << (init_from_rgbd ? "1" : "0")
               << " use_robot_odom=" << (use_robot_odom ? "1" : "0")
@@ -623,8 +654,16 @@ int main(int argc, char** argv) {
 
         if (has_fused && has_marker &&
             std::chrono::duration<double>(now - latest_marker_time).count() <= marker_timeout_sec) {
-            SmoothTowardMarker(latest_marker, fused_pose, marker_alpha);
-            AddSource(cycle_source, fresh_marker ? "MARKER_CORRECT" : "MARKER_SMOOTH");
+            if (MarkerCorrectionAllowed(
+                    latest_marker,
+                    fused_pose,
+                    marker_max_correction_m,
+                    marker_max_correction_rad)) {
+                SmoothTowardMarker(latest_marker, fused_pose, marker_alpha);
+                AddSource(cycle_source, fresh_marker ? "MARKER_CORRECT" : "MARKER_SMOOTH");
+            } else {
+                AddSource(cycle_source, fresh_marker ? "MARKER_REJECT" : "MARKER_REJECT_HOLD");
+            }
         }
 
         auto detection_samples = detection_reader.take();

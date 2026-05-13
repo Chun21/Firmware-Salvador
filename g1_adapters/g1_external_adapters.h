@@ -9,6 +9,7 @@
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
 #include "DetectionModule.hpp"
+#include "g1_ready_location_filter.h"
 #include "LocationModule.hpp"
 
 class G1ExternalAdapters {
@@ -33,7 +34,8 @@ private:
     std::atomic<int64_t> last_detection_us{0};
     std::atomic<int64_t> last_location_us{0};
     int64_t last_timeout_log_us = 0;
+    int64_t last_location_filter_log_us = 0;
+    G1ReadyLocationFilter location_filter;
 };
 
 #endif  // ROBOT_MODEL_G1
-

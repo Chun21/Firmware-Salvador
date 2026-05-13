@@ -48,6 +48,7 @@ public:
 	double numShrinkRatio = 0.85;	// During each resampling, the number of particles is this proportion of that in the previous time.
 	double offsetShrinkRatio = 0.8; // During each resampling, the offsets of x, y, and theta are reduced to this proportion compared to the previous time.
 	double minMarkerCnt = 3;		// The minimum number of Markers required.
+	double residualDistancePower = 0.70; // Lower than the old 1.0 distance divisor, so far markers are not trusted too loosely.
 
 	// Data storage
 	vector<FieldMarker> fieldMarkers;

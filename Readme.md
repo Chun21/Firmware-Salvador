@@ -179,9 +179,27 @@ Useful environment variables:
 | `ROBOCUP_RGBD_INIT_THETA_DEG` | Initial heading in degrees. |
 | `DETECT_DISPLAY=1` | Show the YOLO detection window. |
 | `MARKER_DISPLAY=1` | Show marker/localization debug display. |
+| `ROBOCUP_G1_READY_STABLE_LOC=1` | Enable G1 localization stability filtering before Ready walking. Enabled by default; set to `0` to disable. |
+| `ROBOCUP_G1_LOC_STABLE_SEC` | Seconds of continuous stable localization required before Ready walking. Defaults to `1.0`. |
+| `ROBOCUP_G1_LOC_STABLE_TRANSLATION_M` | Maximum per-update translation considered stable. Defaults to `0.25`. |
+| `ROBOCUP_G1_LOC_STABLE_ROTATION_DEG` | Maximum per-update heading change considered stable. Defaults to `15`. |
+| `ROBOCUP_G1_LOC_JUMP_TRANSLATION_M` | Translation jump threshold rejected by the G1 filter. Defaults to `0.50`. |
+| `ROBOCUP_G1_LOC_JUMP_ROTATION_DEG` | Heading jump threshold rejected by the G1 filter. Defaults to `30`. |
 | `FW_G1_PERCEPTION=0` | Start only Salvador, without perception/localization. |
 
 The launcher automatically adds `--gc` if no GameController flag is provided.
+
+When `ROBOCUP_RGBD_INIT_X/Y/THETA_DEG` are set, `run_g1.sh` also uses them as the marker
+localizer prior automatically.  The G1 defaults are deliberately mild: marker detections below
+confidence `40` are ignored, far marker detections require gradually higher confidence, marker
+corrections are blended with alpha `0.05`, and marker poses that disagree with the current
+fused/odometry pose by more than `0.7 m` or `40°` are rejected
+instead of pulling the robot to a bad relocalization.
+
+During `Ready`, G1 will not walk to the kickoff position until localization quality is stable.
+Large sudden pose jumps are rejected and logged instead of being passed directly to the strategy.
+During `Playing`, G1 uses self ball, teammate ball, and its own last-seen ball for at most `3 s`;
+after all of them expire it stays in place and turns to search for the ball.
 
 ### Start without the perception stack
 
@@ -221,4 +239,3 @@ Special license conditions apply for RoboCup teams.
 ---
 
 **Last Updated:** November 2025
-

@@ -147,6 +147,39 @@ done
 
 export G1_NETWORK_INTERFACE="$IFACE"
 
+configure_g1_localization_defaults() {
+  # Keep startup simple: when the user provides the RGB-D initial pose, reuse it as the
+  # marker-locator prior.  The defaults are intentionally mild: odom/RGB-D remains the
+  # main estimate, while marker localization can correct it only when reasonably consistent.
+  if [[ -n "${ROBOCUP_RGBD_INIT_X:-}" ]]; then
+    export ROBOCUP_MARKER_PRIOR_X="${ROBOCUP_MARKER_PRIOR_X:-$ROBOCUP_RGBD_INIT_X}"
+  fi
+  if [[ -n "${ROBOCUP_RGBD_INIT_Y:-}" ]]; then
+    export ROBOCUP_MARKER_PRIOR_Y="${ROBOCUP_MARKER_PRIOR_Y:-$ROBOCUP_RGBD_INIT_Y}"
+  fi
+  if [[ -n "${ROBOCUP_RGBD_INIT_THETA_DEG:-}" ]]; then
+    export ROBOCUP_MARKER_PRIOR_THETA_DEG="${ROBOCUP_MARKER_PRIOR_THETA_DEG:-$ROBOCUP_RGBD_INIT_THETA_DEG}"
+  fi
+
+  export ROBOCUP_MARKER_PRIOR_X_WINDOW_M="${ROBOCUP_MARKER_PRIOR_X_WINDOW_M:-1.0}"
+  export ROBOCUP_MARKER_PRIOR_Y_WINDOW_M="${ROBOCUP_MARKER_PRIOR_Y_WINDOW_M:-1.0}"
+  export ROBOCUP_MARKER_PRIOR_THETA_WINDOW_DEG="${ROBOCUP_MARKER_PRIOR_THETA_WINDOW_DEG:-60}"
+  export ROBOCUP_MARKER_MIN_CONFIDENCE="${ROBOCUP_MARKER_MIN_CONFIDENCE:-40}"
+  export ROBOCUP_MARKER_FAR_CONFIDENCE_START_M="${ROBOCUP_MARKER_FAR_CONFIDENCE_START_M:-3.0}"
+  export ROBOCUP_MARKER_FAR_CONFIDENCE_SLOPE="${ROBOCUP_MARKER_FAR_CONFIDENCE_SLOPE:-5.0}"
+  export ROBOCUP_MARKER_FAR_CONFIDENCE_MAX="${ROBOCUP_MARKER_FAR_CONFIDENCE_MAX:-65}"
+  export ROBOCUP_MARKER_MIN_COUNT="${ROBOCUP_MARKER_MIN_COUNT:-3}"
+  export ROBOCUP_MARKER_RESIDUAL_TOLERANCE="${ROBOCUP_MARKER_RESIDUAL_TOLERANCE:-0.35}"
+  export ROBOCUP_MARKER_CONVERGE_TOLERANCE="${ROBOCUP_MARKER_CONVERGE_TOLERANCE:-0.30}"
+  export ROBOCUP_MARKER_RESIDUAL_DISTANCE_POWER="${ROBOCUP_MARKER_RESIDUAL_DISTANCE_POWER:-0.70}"
+  export ROBOCUP_FUSION_MARKER_ALPHA="${ROBOCUP_FUSION_MARKER_ALPHA:-0.05}"
+  export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M:-0.7}"
+  export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG:-40}"
+  export ROBOCUP_G1_READY_STABLE_LOC="${ROBOCUP_G1_READY_STABLE_LOC:-1}"
+}
+
+configure_g1_localization_defaults
+
 HAS_GC=0
 for arg in "${FW_ARGS[@]}"; do
   case "$arg" in
@@ -827,8 +860,8 @@ if [ $DEPLOY_ONLY = false ] ; then
             # directly with the robot's system loader can crash before main() on some G1 images.
             # Keep the ELF as fw_salvador.real and install fw_salvador as a small launcher that
             # selects the bundled loader/library path.
-            if [ -f /install/bin/fw_salvador ] && [ ! -f /install/bin/fw_salvador.real ]; then
-                mv /install/bin/fw_salvador /install/bin/fw_salvador.real
+            if [ -f /install/bin/fw_salvador ] && readelf -h /install/bin/fw_salvador >/dev/null 2>&1; then
+                mv -f /install/bin/fw_salvador /install/bin/fw_salvador.real
             fi
 
             cat > /install/bin/fw_salvador <<'EOF'

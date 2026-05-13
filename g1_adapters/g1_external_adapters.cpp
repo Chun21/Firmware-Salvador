@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
@@ -42,6 +43,42 @@ std::optional<point_2d> cameraXyzToRobotRelative(const std::array<float, 3>& xyz
     return point_2d{xyz[2], -xyz[0]};
 }
 
+bool envBoolOrDefault(const char* key, bool default_value) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr) {
+        return default_value;
+    }
+    const std::string value = toLower(raw);
+    if (value == "1" || value == "true" || value == "yes" || value == "on") {
+        return true;
+    }
+    if (value == "0" || value == "false" || value == "no" || value == "off") {
+        return false;
+    }
+    return default_value;
+}
+
+float envFloatOrDefault(const char* key, float default_value) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr) {
+        return default_value;
+    }
+    char* end = nullptr;
+    const float value = std::strtof(raw, &end);
+    if (end == raw || !std::isfinite(value)) {
+        return default_value;
+    }
+    return value;
+}
+
+int64_t envSecondsUsOrDefault(const char* key, float default_seconds) {
+    return static_cast<int64_t>(envFloatOrDefault(key, default_seconds) * 1'000'000.0f);
+}
+
+float degToRad(float deg) {
+    return deg * static_cast<float>(M_PI) / 180.0f;
+}
+
 htwk::ObjectType mapPointFeature(const std::string& class_name) {
     const std::string name = toLower(class_name);
     if (name == "goalpost")
@@ -77,6 +114,22 @@ std::shared_ptr<htwk::NearObstacleTrackerResult> makeEmptyObstacleResult() {
 }  // namespace
 
 G1ExternalAdapters::G1ExternalAdapters() {
+    location_filter.configure(
+            G1ReadyLocationFilter::Config{.enabled = envBoolOrDefault(
+                                                  "ROBOCUP_G1_READY_STABLE_LOC", true),
+                                          .stable_required_us = envSecondsUsOrDefault(
+                                                  "ROBOCUP_G1_LOC_STABLE_SEC", 1.0f),
+                                          .stable_translation_m = envFloatOrDefault(
+                                                  "ROBOCUP_G1_LOC_STABLE_TRANSLATION_M", 0.25f),
+                                          .stable_rotation_rad = degToRad(envFloatOrDefault(
+                                                  "ROBOCUP_G1_LOC_STABLE_ROTATION_DEG", 15.0f)),
+                                          .jump_translation_m = envFloatOrDefault(
+                                                  "ROBOCUP_G1_LOC_JUMP_TRANSLATION_M", 0.50f),
+                                          .jump_rotation_rad = degToRad(envFloatOrDefault(
+                                                  "ROBOCUP_G1_LOC_JUMP_ROTATION_DEG", 30.0f)),
+                                          .stable_quality = 0.9f,
+                                          .unstable_quality = 0.0f});
+
     detection_subscriber =
             std::make_unique<unitree::robot::ChannelSubscriber<DetectionModule::DetectionResults>>(
                     kDetectionTopic);
@@ -90,7 +143,9 @@ G1ExternalAdapters::G1ExternalAdapters() {
             [this](const void* msg) { this->handleLocation(msg); });
 
     near_obstacles_tracker_result_channel.publish(makeEmptyObstacleResult());
-    LOG_F(INFO, "G1 external perception/localization adapters initialized");
+    LOG_F(INFO,
+          "G1 external perception/localization adapters initialized; ready stable loc filter=%s",
+          envBoolOrDefault("ROBOCUP_G1_READY_STABLE_LOC", true) ? "on" : "off");
 }
 
 G1ExternalAdapters::~G1ExternalAdapters() {
@@ -177,12 +232,26 @@ void G1ExternalAdapters::handleLocation(const void* msg) {
     const auto* location_msg = static_cast<const LocationModule::LocationResult*>(msg);
     last_location_us.store(time_us());
 
+    const htwk::Position raw_position(location_msg->robot2field_x(), location_msg->robot2field_y(),
+                                      location_msg->robot2field_theta());
+    const auto filtered = location_filter.update(raw_position, last_location_us.load());
+
     LocPosition loc_position;
-    loc_position.position = htwk::Position(location_msg->robot2field_x(),
-                                           location_msg->robot2field_y(),
-                                           location_msg->robot2field_theta());
-    loc_position.quality = loc_position.position.isAnyNan() ? 0.0f : 0.9f;
+    loc_position.position = filtered.position;
+    loc_position.quality = filtered.quality;
     loc_position_channel.publish(loc_position);
+
+    const int64_t now = last_location_us.load();
+    if ((filtered.rejected_jump || !filtered.stable) && now - last_location_filter_log_us > 1_s) {
+        LOG_F(WARNING,
+              "G1 location not stable: raw=(%.2f, %.2f, %.1fdeg) used=(%.2f, %.2f, %.1fdeg) "
+              "quality=%.1f accepted=%d rejected_jump=%d",
+              raw_position.x, raw_position.y, raw_position.a * 180.0f / static_cast<float>(M_PI),
+              loc_position.position.x, loc_position.position.y,
+              loc_position.position.a * 180.0f / static_cast<float>(M_PI),
+              loc_position.quality, filtered.accepted ? 1 : 0, filtered.rejected_jump ? 1 : 0);
+        last_location_filter_log_us = now;
+    }
 }
 
 bool G1ExternalAdapters::isBallClass(const std::string& class_name) {
