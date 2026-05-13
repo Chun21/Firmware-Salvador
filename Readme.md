@@ -11,6 +11,7 @@ This firmware was successfully used at the RoboCup Salvador 2025, Beijing Master
 
 - [Supported Robots](#supported-robots)
 - [Installation & Build](#installation--build)
+- [Unitree G1 RoboCup](#unitree-g1-robocup)
 - [Deployment](#deployment)
 - [License](#license)
 
@@ -31,6 +32,15 @@ This firmware was successfully used at the RoboCup Salvador 2025, Beijing Master
   - `build-k1z/deploy` (ZED2)
   - `build-k1bc/deploy` (Booster Camera)
     using the Booster Camera is highly untestet. It might only work in 1 out of 5 cases. 
+
+### Unitree G1
+- **Camera:** external RealSense + 2DOF head servo
+- **Build Option:** `--g1`
+- **Deploy Directory:** `build-g1/deploy`
+- **Runtime Stack:** G1 servo service, YOLO detector, marker locator, location fusion, and
+  `fw_salvador`
+- **Safety:** G1 mode only uses high-level locomotion in the first phase. Low-level
+  `JointControl`, T1/K1 policies, true kicking, and dive actions are blocked.
 
 ---
 
@@ -72,6 +82,12 @@ This command will build our firmware. The Docker image from step 1 needs to be a
 ./install.bash --k1bc
 ```
 
+#### For Unitree G1
+```bash
+./install.bash --g1
+```
+
+
 ### 3.1. Build and Deploy to Single Robot
 
 This command will build and deploy our firmware to a robot. Please note that the robot model needs to be specified.
@@ -107,6 +123,94 @@ Execute on robot
 
 ---
 
+## Unitree G1 RoboCup
+
+### Build
+
+Build the G1 firmware and package the vendored G1 perception/localization runtime:
+
+```bash
+./install.bash --g1
+```
+
+The generated runtime is under:
+
+```bash
+build-g1/deploy
+```
+
+If deploying manually, copy the **whole** `build-g1/deploy` directory to the G1. The
+`g1_perception` directory and `run_g1.sh` are required; copying only `bin/` and `lib/` is not
+enough for the full RoboCup stack.
+
+### Start the full G1 RoboCup stack
+
+Run this on the G1 from `build-g1/deploy`:
+
+```bash
+cd build-g1/deploy
+
+ROBOCUP_RGBD_INIT_X=0.0 \
+ROBOCUP_RGBD_INIT_Y=-3.0 \
+ROBOCUP_RGBD_INIT_THETA_DEG=90 \
+ROBOCUP_SERVO_SERIAL=/dev/ttyUSB0 \
+DETECT_DISPLAY=1 \
+./run_g1.sh --gc
+```
+
+What this starts:
+
+```text
+g1_comp_servo_service
+football_detect
+marker_locator
+location_fusion
+fw_salvador --gc
+```
+
+Useful environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `G1_NETWORK_INTERFACE` | DDS network interface. Defaults to `eth0`. |
+| `ROBOCUP_SERVO_SERIAL` | Head-servo serial device, for example `/dev/ttyUSB0`. |
+| `ROBOCUP_RGBD_INIT_X` | Initial field-frame x position for RGB-D odometry. |
+| `ROBOCUP_RGBD_INIT_Y` | Initial field-frame y position for RGB-D odometry. |
+| `ROBOCUP_RGBD_INIT_THETA_DEG` | Initial heading in degrees. |
+| `DETECT_DISPLAY=1` | Show the YOLO detection window. |
+| `MARKER_DISPLAY=1` | Show marker/localization debug display. |
+| `FW_G1_PERCEPTION=0` | Start only Salvador, without perception/localization. |
+
+The launcher automatically adds `--gc` if no GameController flag is provided.
+
+### Start without the perception stack
+
+Use this only when another process already publishes the required DDS topics
+(`detectionresults` and `rt/locationresults`):
+
+```bash
+cd build-g1/deploy
+./run_g1.sh --salvador-only --gc
+```
+
+or:
+
+```bash
+FW_G1_PERCEPTION=0 ./run_g1.sh --gc
+```
+
+### Stop the stack
+
+Press `Ctrl-C` in the terminal running `run_g1.sh`, or run:
+
+```bash
+cd build-g1/deploy
+./stop_g1_stack.sh
+```
+
+
+---
+
 
 ## 📝 License
 
@@ -117,5 +221,4 @@ Special license conditions apply for RoboCup teams.
 ---
 
 **Last Updated:** November 2025
-
 
