@@ -115,12 +115,21 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
         if (wtp_order->head_focus)
             focus = *wtp_order->head_focus;
     } else if (isOrder<MoveBallGoalOrder>(order)) {
-        auto* mbg_order = dynamic_cast<MoveBallGoalOrder*>(order.get());
         std::optional<RelBall> rel_ball = rel_ball_sub.latest();
+#ifdef ROBOT_MODEL_G1
+        const int64_t kG1BallFallbackTtl = htwk::g1::ballFallbackTtlUs();
+        std::optional<point_2d> ball_rel = g1_ball_fallback.updateAndSelect(
+                rel_ball, *current_pos, striker_sub.latest(), time_us(), kG1BallFallbackTtl);
+        if (!ball_rel) {
+            return MotionCommand::Nothing;
+        }
+        dest = {LocalizationUtils::relToAbs(*ball_rel, current_pos->position), 0};
+#else
         if (!rel_ball) {
             return MotionCommand::Nothing;
         }
         dest = {LocalizationUtils::relToAbs(rel_ball->pos_rel, current_pos->position), 0};
+#endif
         focus = HeadFocus::BALL;
         omni_dist = 3.0f;  // Change also in dribble.cpp!!
     } else {
@@ -153,6 +162,14 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
     }
 
 #ifdef ROBOT_MODEL_G1
+    if (gc_state_sub.latest().state == GameState::Ready && isOrder<WalkToPositionOrder>(order)) {
+        // G1 Ready always uses the turn-then-forward controller, regardless of distance. Falling
+        // through to the generic vector-field branch can command faster 1.0 m/s walking and can
+        // keep turning in place after marker-direct localization jumps.
+        return g1ReadyWalkCommand(dest_rel, normalizeRotation(dest.a - current_pos->position.a),
+                                  focus);
+    }
+
     const auto* walk_to_position_order = dynamic_cast<WalkToPositionOrder*>(order.get());
     const bool g1_ball_walk_order =
             isOrder<MoveBallGoalOrder>(order) ||
@@ -179,10 +196,6 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
             focus = HeadFocus::BALL_GOALIE;
         }
 #ifdef ROBOT_MODEL_G1
-        if (gc_state_sub.latest().state == GameState::Ready && isOrder<WalkToPositionOrder>(order)) {
-            return g1ReadyWalkCommand(dest_rel,
-                                      normalizeRotation(dest.a - current_pos->position.a), focus);
-        }
 #endif
         return MotionCommand::Walk(
                 {.dx = clamp(dest_rel.x * 1.f, -0.15f, 1.0f),

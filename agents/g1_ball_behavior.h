@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "motion_command.h"
 #include "point_2d.h"
@@ -15,12 +16,22 @@ inline MotionCommand g1BallSearchCommand(bool last_seen_left) {
             last_seen_left ? HeadFocus::BALL_SEARCH_LEFT : HeadFocus::BALL_SEARCH_RIGHT);
 }
 
+inline std::optional<MotionCommand> g1StrikerLostBallSearchCommand(bool has_current_ball,
+                                                                   bool is_striker_order,
+                                                                   bool has_fresh_fallback,
+                                                                   bool last_seen_left) {
+    if (!is_striker_order || has_current_ball || has_fresh_fallback) {
+        return std::nullopt;
+    }
+    return g1BallSearchCommand(last_seen_left);
+}
+
 inline MotionCommand g1TurnForwardToBallCommand(const point_2d& ball_pos_rel,
                                                 HeadFocus focus = HeadFocus::BALL) {
-    constexpr float kMaxForward = 1.00f;
-    constexpr float kMinForward = 0.10f;
+    constexpr float kMaxForward = 0.55f;
+    constexpr float kMinForward = 0.08f;
     constexpr float kMaxYaw = 0.50f;
-    constexpr float kWalkAngle = 0.50f;  // about 29 deg
+    constexpr float kWalkAngle = 0.35f;  // about 20 deg
 
     const float ball_distance = ball_pos_rel.norm();
     const float ball_angle = ball_pos_rel.to_direction();
@@ -39,13 +50,13 @@ inline MotionCommand g1TurnForwardToBallCommand(const point_2d& ball_pos_rel,
 }
 
 inline MotionCommand g1ConservativeDribbleCommand(const point_2d& ball_pos_rel) {
-    constexpr float kMaxForward = 1.00f;
-    constexpr float kPushForward = 0.80f;
-    constexpr float kMinForward = 0.10f;
+    constexpr float kMaxForward = 0.45f;
+    constexpr float kPushForward = 0.45f;
+    constexpr float kMinForward = 0.08f;
     constexpr float kMaxYaw = 0.45f;
-    constexpr float kCenterY = 0.10f;
-    constexpr float kAlignAngle = 0.24f;  // about 14 deg
-    constexpr float kWalkAngle = 0.45f;   // about 26 deg
+    constexpr float kCenterY = 0.07f;
+    constexpr float kAlignAngle = 0.16f;  // about 9 deg
+    constexpr float kWalkAngle = 0.30f;   // about 17 deg
 
     const float ball_distance = ball_pos_rel.norm();
     const float ball_angle = ball_pos_rel.to_direction();
@@ -71,6 +82,25 @@ inline MotionCommand g1ConservativeDribbleCommand(const point_2d& ball_pos_rel) 
     }
 
     return MotionCommand::Walk({.dx = dx, .dy = dy, .da = da}, HeadFocus::BALL);
+}
+
+inline std::optional<MotionCommand> g1StrikerLostBallFallbackCommand(bool has_current_ball,
+                                                                     bool is_striker_order,
+                                                                     const point_2d& fallback_ball) {
+    if (!is_striker_order || has_current_ball) {
+        return std::nullopt;
+    }
+    if (fallback_ball.norm() < 0.70f && fallback_ball.x > 0.0f) {
+        // When the ball is very close it is easy for the bottom of the camera image to lose it for
+        // a few frames. Keep pushing through the last fresh estimate instead of handing control
+        // back to generic positioning/search, which makes G1 turn away from the ball.
+        return MotionCommand::Walk(
+                {.dx = 0.25f,
+                 .dy = 0.0f,
+                 .da = std::clamp(fallback_ball.to_direction() * 0.5f, -0.20f, 0.20f)},
+                HeadFocus::BALL);
+    }
+    return g1ConservativeDribbleCommand(fallback_ball);
 }
 
 #endif  // ROBOT_MODEL_G1

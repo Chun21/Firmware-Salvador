@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "DetectionModule.hpp"
@@ -24,6 +25,11 @@ class Locator {
         void detectProcessMarkings(const vector<GameObject> &markingObjs);
     
         std::vector<FieldMarker> getMarkers();
+        bool confirmInitialLocate(LocateResult& res);
+
+        int pendingInitialConfirmCount = 0;
+        Pose2D pendingInitialPose{};
+        double pendingInitialResidual = std::numeric_limits<double>::infinity();
 
     public:
 

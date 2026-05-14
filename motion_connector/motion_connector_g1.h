@@ -42,9 +42,11 @@ private:
     bool standing = false;
 
     void sendSafeStop(const YawPitch& head_angles);
-    void sendWalk(const MotionCommand::WalkRequest& walk_request, const YawPitch& head_angles);
+    void sendWalk(const MotionCommand::WalkRequest& walk_request, HeadFocus focus,
+                  const YawPitch& head_angles);
     void sendHead(const YawPitch& head_angles);
-    MotionCommand::WalkRequest limitWalkRequest(const MotionCommand::WalkRequest& request);
+    MotionCommand::WalkRequest limitWalkRequest(const MotionCommand::WalkRequest& request,
+                                                HeadFocus focus);
     bool movementAllowed(const GCState& state) const;
 };
 

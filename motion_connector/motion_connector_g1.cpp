@@ -14,6 +14,7 @@ namespace {
 constexpr float kMaxForwardSpeed = 1.00f;
 constexpr float kMaxBackwardSpeed = 0.15f;
 constexpr float kMaxSideSpeed = 0.25f;
+constexpr float kMaxNonBallSideSpeed = 0.0f;
 constexpr float kMaxYawSpeed = 0.60f;
 constexpr float kMaxForwardAccel = 0.60f;
 constexpr float kMaxSideAccel = 0.50f;
@@ -30,6 +31,10 @@ float radToDeg(float rad) {
 
 float slew(float previous, float target, float max_delta) {
     return previous + std::clamp(target - previous, -max_delta, max_delta);
+}
+
+bool isBallControlFocus(HeadFocus focus) {
+    return focus == HeadFocus::BALL || focus == HeadFocus::BALL_GOALIE;
 }
 
 }  // namespace
@@ -65,14 +70,15 @@ bool MotionConnector::movementAllowed(const GCState& state) const {
 }
 
 MotionCommand::WalkRequest MotionConnector::limitWalkRequest(
-        const MotionCommand::WalkRequest& request) {
+        const MotionCommand::WalkRequest& request, HeadFocus focus) {
     const int64_t now = time_us();
     const float dt = last_motion_us == 0 ? 0.02f : std::max(0.001f, (now - last_motion_us) / 1e6f);
     last_motion_us = now;
+    const float max_side_speed = isBallControlFocus(focus) ? kMaxSideSpeed : kMaxNonBallSideSpeed;
 
     MotionCommand::WalkRequest limited{
             .dx = std::clamp(request.dx, -kMaxBackwardSpeed, kMaxForwardSpeed),
-            .dy = std::clamp(request.dy, -kMaxSideSpeed, kMaxSideSpeed),
+            .dy = std::clamp(request.dy, -max_side_speed, max_side_speed),
             .da = std::clamp(request.da, -kMaxYawSpeed, kMaxYawSpeed),
     };
 
@@ -109,17 +115,21 @@ void MotionConnector::sendSafeStop(const YawPitch& head_angles) {
     standing = true;
 }
 
-void MotionConnector::sendWalk(const MotionCommand::WalkRequest& walk_request,
+void MotionConnector::sendWalk(const MotionCommand::WalkRequest& walk_request, HeadFocus focus,
                                const YawPitch& head_angles) {
     sendHead(head_angles);
-    const MotionCommand::WalkRequest limited = limitWalkRequest(walk_request);
+    const MotionCommand::WalkRequest limited = limitWalkRequest(walk_request, focus);
     const int64_t now = time_us();
     if (now - last_walk_log_us > 500_ms) {
         LOG_F(INFO,
               "G1 sendWalk requested=(dx=%.3f dy=%.3f da=%.3f) limited=(dx=%.3f dy=%.3f "
-              "da=%.3f) head=(yaw=%.1fdeg pitch=%.1fdeg)",
+              "da=%.3f) focus=%d%s head=(yaw=%.1fdeg pitch=%.1fdeg)",
               walk_request.dx, walk_request.dy, walk_request.da, limited.dx, limited.dy,
-              limited.da, radToDeg(head_angles.yaw), radToDeg(head_angles.pitch));
+              limited.da, static_cast<int>(focus),
+              (!isBallControlFocus(focus) && std::abs(walk_request.dy) > 1e-4f)
+                      ? " non-ball lateral clamped"
+                      : "",
+              radToDeg(head_angles.yaw), radToDeg(head_angles.pitch));
         last_walk_log_us = now;
     }
     const int32_t move_ret = client.Move(limited.dx, limited.dy, limited.da);
@@ -161,7 +171,7 @@ void MotionConnector::proceed() {
     }
 
     if (motion_command.type == MotionCommand::Type::WALK) {
-        sendWalk(motion_command.walk_request, head_angles);
+        sendWalk(motion_command.walk_request, motion_command.focus, head_angles);
         return;
     }
 

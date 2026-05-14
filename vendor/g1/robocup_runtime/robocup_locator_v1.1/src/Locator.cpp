@@ -52,6 +52,10 @@ bool EnvBoolOrDefault(const char* key, bool default_value) {
     return default_value;
 }
 
+int EnvIntOrDefault(const char* key, int default_value) {
+    return std::max(1, static_cast<int>(EnvDoubleOrDefault(key, default_value)));
+}
+
 void ApplyOptionalInitialPrior(PoseBox2D& constraints) {
     double prior_x = 0.0;
     double prior_y = 0.0;
@@ -92,6 +96,79 @@ void ApplyInitialOwnHalfOuterSearch(PoseBox2D& constraints, const FieldDimension
 }
 
 }  // namespace
+
+bool Locator::confirmInitialLocate(LocateResult& res) {
+    if (odomCalibrated || !EnvBoolOrDefault("ROBOCUP_MARKER_INITIAL_CONFIRM", true)) {
+        return true;
+    }
+
+    const double initial_residual_tolerance =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_RESIDUAL_TOLERANCE",
+                           pf_locator->residualTolerance);
+    if (res.residual > initial_residual_tolerance) {
+        pendingInitialConfirmCount = 0;
+        pendingInitialResidual = std::numeric_limits<double>::infinity();
+        std::cout << "[Locator] initial pose rejected: residual=" << res.residual
+                  << " > initial_residual_tolerance=" << initial_residual_tolerance << std::endl;
+        return false;
+    }
+
+    const int required_count = EnvIntOrDefault("ROBOCUP_MARKER_INITIAL_CONFIRM_COUNT", 2);
+    if (required_count <= 1) {
+        return true;
+    }
+
+    const double max_translation =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_CONFIRM_TRANSLATION_M", 0.7);
+    const double max_rotation =
+        deg2rad(EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_CONFIRM_ROTATION_DEG", 35.0));
+
+    if (pendingInitialConfirmCount <= 0) {
+        pendingInitialPose = res.pose;
+        pendingInitialResidual = res.residual;
+        pendingInitialConfirmCount = 1;
+        std::cout << "[Locator] initial pose pending 1/" << required_count
+                  << ": pose=(" << pendingInitialPose.x << "," << pendingInitialPose.y << ","
+                  << rad2deg(pendingInitialPose.theta) << "deg) residual="
+                  << pendingInitialResidual << std::endl;
+        return false;
+    }
+
+    const double translation_delta =
+        norm(res.pose.x - pendingInitialPose.x, res.pose.y - pendingInitialPose.y);
+    const double rotation_delta = std::abs(toPInPI(res.pose.theta - pendingInitialPose.theta));
+    if (translation_delta > max_translation || rotation_delta > max_rotation) {
+        pendingInitialPose = res.pose;
+        pendingInitialResidual = res.residual;
+        pendingInitialConfirmCount = 1;
+        std::cout << "[Locator] initial pose confirmation reset: delta=" << translation_delta
+                  << "m/" << rad2deg(rotation_delta) << "deg, new residual="
+                  << pendingInitialResidual << std::endl;
+        return false;
+    }
+
+    ++pendingInitialConfirmCount;
+    if (res.residual < pendingInitialResidual) {
+        pendingInitialPose = res.pose;
+        pendingInitialResidual = res.residual;
+    }
+
+    if (pendingInitialConfirmCount < required_count) {
+        std::cout << "[Locator] initial pose pending " << pendingInitialConfirmCount << "/"
+                  << required_count << ": delta=" << translation_delta << "m/"
+                  << rad2deg(rotation_delta) << "deg residual=" << res.residual << std::endl;
+        return false;
+    }
+
+    res.pose = pendingInitialPose;
+    std::cout << "[Locator] initial pose confirmed " << pendingInitialConfirmCount << "/"
+              << required_count << ": pose=(" << res.pose.x << "," << res.pose.y << ","
+              << rad2deg(res.pose.theta) << "deg) best_residual=" << pendingInitialResidual
+              << std::endl;
+    pendingInitialConfirmCount = 0;
+    pendingInitialResidual = std::numeric_limits<double>::infinity();
+    return true;
+}
 
 void Locator::init(YamlParser _config) {
 
@@ -362,10 +439,17 @@ bool Locator::selfLocate() {
     // 5: The probabilities of all particles are too low
     std::cout << "locate result: res: " << to_string(res.code) << " time: " << to_string(res.msecs) << std::endl;
 
+    if (res.success && !confirmInitialLocate(res)) {
+        return false;
+    }
+
     if (res.success) {
         calibrateOdom(res.pose.x, res.pose.y, res.pose.theta);
         odomCalibrated = true;
         lastSuccessfulLocalizeTime = std::chrono::high_resolution_clock::now();
+    } else if (!odomCalibrated) {
+        pendingInitialConfirmCount = 0;
+        pendingInitialResidual = std::numeric_limits<double>::infinity();
     }
     
     std::cout << "locate success: " << to_string(res.pose.x) << " " << to_string(res.pose.y) << " " + to_string(rad2deg(res.pose.theta)) << " Dur: " << to_string(res.msecs) << std::endl;

@@ -2,12 +2,16 @@
 #include <unistd.h> //进程控制、文件操作、系统调用
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream> //C++标准输入/输出流库
 #include <sstream>
 #include <string> //C++标准字符串库
 #include <vector>
 #include "YOLO.h" //YOLO目标检测类头文件
+#include "detection_filter.h"
 #include "RgbdLocalizer.h"
 
 #include <thread> // 标准线程库
@@ -47,6 +51,21 @@ int read_env_int(const char* key, int default_value) {
         return default_value;
     }
     return static_cast<int>(parsed);
+}
+
+float read_env_float(const char* key, float default_value) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr || raw[0] == '\0') {
+        return default_value;
+    }
+    char* end = nullptr;
+    const float parsed = std::strtof(raw, &end);
+    if (end == raw || !std::isfinite(parsed)) {
+        std::cerr << "Invalid float env " << key << "=" << raw
+                  << ", using default " << default_value << std::endl;
+        return default_value;
+    }
+    return parsed;
 }
 
 // 图像参数定义。默认使用 640x480@30，保证识别帧率；仍可通过环境变量临时覆盖。
@@ -371,7 +390,9 @@ std::pair<float, float> safe_calculate_angles(
 void publish_detection_results(
     const vector<Detection> objects,
     const rs2_intrinsics& intrinsics,
-    dds::pub::DataWriter<DetectionModule::DetectionResults> & writer) {
+    dds::pub::DataWriter<DetectionModule::DetectionResults> & writer,
+    std::uint64_t frame_id,
+    double infer_ms) {
     DetectionModule::DetectionResults results;// 创建DDS结果对象
     // 遍历所有检测对象
     for (const auto& obj : objects) {
@@ -413,7 +434,42 @@ void publish_detection_results(
     }
 
     writer.write(results);// 发布结果
-    std::cout << "Published detection results" << std::endl;
+    const int log_every_n = read_env_int("ROBOCUP_DETECT_LOG_EVERY_N", 1);
+    if (log_every_n > 0 && frame_id % static_cast<std::uint64_t>(log_every_n) == 0) {
+        std::cout << std::fixed << std::setprecision(3)
+                  << "Detection frame=" << frame_id
+                  << " objects=" << objects.size()
+                  << " infer_ms=" << infer_ms << std::endl;
+        for (const auto& obj : objects) {
+            std::cout << std::fixed << std::setprecision(3)
+                      << "  " << SafeClassName(obj.class_id)
+                      << " score=" << obj.conf
+                      << " box=[" << obj.bbox.x << "," << obj.bbox.y << ","
+                      << obj.bbox.x + obj.bbox.width << ","
+                      << obj.bbox.y + obj.bbox.height << "]"
+                      << " xyz=[" << obj.XYZ.x << "," << obj.XYZ.y << "," << obj.XYZ.z << "]"
+                      << std::endl;
+        }
+    }
+}
+
+float detection_range_m(const Detection& obj) {
+    if (!std::isfinite(obj.XYZ.x) || !std::isfinite(obj.XYZ.z)) {
+        return 0.0f;
+    }
+    return std::sqrt(obj.XYZ.x * obj.XYZ.x + obj.XYZ.z * obj.XYZ.z);
+}
+
+std::vector<Detection> filter_detections_for_runtime(const std::vector<Detection>& objects) {
+    std::vector<Detection> filtered;
+    filtered.reserve(objects.size());
+    for (const auto& obj : objects) {
+        if (g1DetectDisplayAccepts(SafeClassName(obj.class_id), obj.conf,
+                                   detection_range_m(obj))) {
+            filtered.push_back(obj);
+        }
+    }
+    return filtered;
 }
 
 double current_head_yaw_deg(
@@ -451,7 +507,11 @@ void processing_loop(
     const std::shared_ptr<unitree::robot::SubscriptionBase<unitree_hg::msg::dds_::LowState_>>& low_state,
     string show_image_flag) {
     int specific_class_id = 0; //// 特定类别ID(0表示特殊处理)
-    float conf_flag = 0.4;      // 置信度阈值
+    float conf_flag = read_env_float("ROBOCUP_DETECT_MIN_SCORE", 0.4f);      // 置信度阈值
+    std::uint64_t frame_id = 0;
+    std::cout << "Detection postprocess min_score=" << conf_flag
+              << " log_every_n=" << read_env_int("ROBOCUP_DETECT_LOG_EVERY_N", 1)
+              << std::endl;
     int consecutive_frame_misses = 0;
     constexpr int kMaxConsecutiveFrameMissesBeforeReconnect = 5;
     // 创建对齐对象(将深度图对齐到彩色图)
@@ -534,10 +594,14 @@ void processing_loop(
         auto end = std::chrono::system_clock::now();
   // 后处理(过滤低置信度结果)
         model.postprocess(objects,depth_image,camera.intrinsics,conf_flag,specific_class_id);
-        // 在图像上绘制检测结果  
-        model.draw(image, objects);
+        std::vector<Detection> runtime_objects = filter_detections_for_runtime(objects);
+        // 显示框和发布给策略/定位的阈值保持一致：
+        // Ball 使用 ROBOCUP_G1_BALL_MIN_SCORE，L/T/X 使用 marker locator 的置信度阈值。
+        model.draw(image, runtime_objects);
+       // 计算推理时间
+        auto tc = (double)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.;
             // 发布检测结果
-        publish_detection_results(objects, camera.intrinsics, detection_writer);
+        publish_detection_results(runtime_objects, camera.intrinsics, detection_writer, ++frame_id, tc);
 
         rgbd_localizer.update(
             image,
@@ -550,9 +614,6 @@ void processing_loop(
         if (rgbd_localizer.has_pose()) {
             location_writer.write(rgbd_localizer.pose());
         }
-       // 计算并打印推理时间
-        auto tc = (double)std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / 1000.;
-        printf("cost %2.4lf ms\n", tc);
         // 根据标志决定是否显示图像
         if (show_image_flag=="1")
         {

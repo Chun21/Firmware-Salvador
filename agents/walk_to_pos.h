@@ -11,6 +11,10 @@
 #include "team_strategy_pub_sub.h"
 #include "walktopositionorder.h"
 
+#ifdef ROBOT_MODEL_G1
+#include "g1_ball_fallback.h"
+#endif
+
 class WalkToPositionAgent : public AgentBase {
 public:
     WalkToPositionAgent() : AgentBase("WalkToPosition") {}
@@ -33,6 +37,10 @@ private:
     htwk::ChannelSubscriber<std::shared_ptr<htwk::NearObstacleTrackerResult>>
             near_obstacle_tracker_result_sub =
                     near_obstacles_tracker_result_channel.create_subscriber();
+
+#ifdef ROBOT_MODEL_G1
+    htwk::g1::BallFallbackMemory g1_ball_fallback;
+#endif
 
     float avoidance_side_decision = 0;
     int64_t avoidance_side_decision_reset_time = time_us();

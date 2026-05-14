@@ -23,6 +23,7 @@ namespace {
 
 constexpr const char* kDefaultMarkerLocationTopic = "rt/locationresults_marker";
 constexpr const char* kMarkerLocationTopicEnv = "ROBOCUP_MARKER_LOCATION_TOPIC";
+constexpr const char* kMarkerPublishContinuousEnv = "ROBOCUP_MARKER_PUBLISH_CONTINUOUS";
 
 std::string GetEnvOrDefault(const char* key, const char* default_value) {
     const char* value = std::getenv(key);
@@ -128,7 +129,10 @@ int main(int argc, char *argv[])
     // The fusion node subscribes this topic and publishes the only final rt/locationresults.
     const std::string marker_location_topic_name =
         GetEnvOrDefault(kMarkerLocationTopicEnv, kDefaultMarkerLocationTopic);
+    const bool marker_publish_continuous = GetEnvBool(kMarkerPublishContinuousEnv, false);
     std::cout << "Marker absolute location topic: " << marker_location_topic_name << std::endl;
+    std::cout << "Marker continuous publish: "
+              << (marker_publish_continuous ? "enabled" : "disabled") << std::endl;
     std::unique_ptr<unitree::robot::RealTimePublisher<LocationModule::LocationResult>> posePub;
     posePub = std::make_unique<unitree::robot::RealTimePublisher<LocationModule::LocationResult>>(marker_location_topic_name);
 
@@ -234,8 +238,9 @@ int main(int argc, char *argv[])
             }
         }//
 
-        // Publish only fresh marker-based absolute corrections.
-        // The final fused pose is published by location_fusion.
+        // In fusion mode publish only fresh marker-based absolute corrections.
+        // In direct-marker mode, publish the live marker-calibrated odom pose continuously as
+        // rt/locationresults so fw_salvador does not time out between accepted marker corrections.
         //
         // For display, however, keep the robot icon live even when no new marker
         // correction was accepted in this cycle: apply the latest odom->field
@@ -247,7 +252,7 @@ int main(int argc, char *argv[])
                 locator.odomToField.x, locator.odomToField.y, locator.odomToField.theta,
                 locator.robotPoseToField.x, locator.robotPoseToField.y, locator.robotPoseToField.theta);
 
-            if (marker_pose_updated) {
+            if (marker_pose_updated || marker_publish_continuous) {
                 std::cout << "== Final RobotToFiled: ("
                                 << locator.robotPoseToField.x << ", "
                                 << locator.robotPoseToField.y << ", "

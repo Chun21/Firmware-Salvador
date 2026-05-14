@@ -11,6 +11,7 @@
 #include "point_2d.h"
 #include "point_3d.h"
 #include "position.h"
+#include "robot_time.h"
 #include "soccerfield.h"
 #include "stl_ext.h"
 #include "unordered_map"
@@ -93,14 +94,23 @@ MotionCommand DribbleAgent::proceed(std::shared_ptr<Order> order) {
         return MotionCommand::Nothing;
     }
 
+#ifdef ROBOT_MODEL_G1
+    const int64_t kG1BallFallbackTtl = htwk::g1::ballFallbackTtlUs();
+    std::optional<point_2d> g1_ball_rel = g1_ball_fallback.updateAndSelect(
+            rel_ball, *loc_position, striker_sub.latest(), time_us(), kG1BallFallbackTtl);
+    if (!g1_ball_rel) {
+        return MotionCommand::Nothing;
+    }
+    if (g1_ball_rel->norm() > 3.0f)  // change also in walkToPos!
+        return MotionCommand::Nothing;
+
+    return g1ConservativeDribbleCommand(*g1_ball_rel);
+#else
     if (!rel_ball) {
         return MotionCommand::Nothing;
     }
     if (rel_ball->pos_rel.norm() > 3.0f)  // change also in walkToPos!
         return MotionCommand::Nothing;
-
-#ifdef ROBOT_MODEL_G1
-    return g1ConservativeDribbleCommand(rel_ball->pos_rel);
 #endif
 
     htwk::Position robot_pos = loc_position->position;

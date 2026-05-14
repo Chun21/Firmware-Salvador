@@ -99,11 +99,13 @@ set -Eeuo pipefail
 # By default it starts the vendored G1 perception/localization runtime packaged
 # inside this Firmware-Salvador deploy directory:
 #   g1_perception/g1_comp_servo_service -> football_detect(RealSense + YOLO)
-#   -> marker_locator -> location_fusion -> fw_salvador
+#   -> marker_locator -> optional location_fusion -> fw_salvador
 #
 # Useful overrides:
 #   G1_NETWORK_INTERFACE=eth0 ./run_g1.sh
 #   FW_G1_PERCEPTION=0 ./run_g1.sh          # only start Salvador
+#   ROBOCUP_G1_USE_FUSION=1 ./run_g1.sh    # enable RGB-D/odom/marker fusion
+#   ROBOCUP_G1_USE_FUSION=0 ./run_g1.sh    # marker locator publishes rt/locationresults directly
 #   ./run_g1.sh --salvador-only             # only start Salvador
 #   DETECT_DISPLAY=1 MARKER_DISPLAY=1 ./run_g1.sh
 
@@ -116,6 +118,7 @@ IFACE="${G1_NETWORK_INTERFACE:-eth0}"
 DETECT_DISPLAY="${DETECT_DISPLAY:-0}"
 MARKER_DISPLAY="${MARKER_DISPLAY:-0}"
 FW_G1_PERCEPTION="${FW_G1_PERCEPTION:-1}"
+ROBOCUP_G1_USE_FUSION="${ROBOCUP_G1_USE_FUSION:-0}"
 ROBOCUP_SERVO_SERIAL="${ROBOCUP_SERVO_SERIAL:-}"
 ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 SALVADOR_LD_LIBRARY_PATH="$LIB_DIR${ORIGINAL_LD_LIBRARY_PATH:+:$ORIGINAL_LD_LIBRARY_PATH}"
@@ -138,6 +141,14 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --marker-display)
       MARKER_DISPLAY=1
+      shift
+      ;;
+    --fusion-loc)
+      ROBOCUP_G1_USE_FUSION=1
+      shift
+      ;;
+    --no-fusion-loc)
+      ROBOCUP_G1_USE_FUSION=0
       shift
       ;;
     *)
@@ -165,8 +176,8 @@ configure_g1_localization_defaults() {
     fi
   fi
 
-  export ROBOCUP_MARKER_INITIAL_PARTICLES="${ROBOCUP_MARKER_INITIAL_PARTICLES:-2500}"
-  export ROBOCUP_MARKER_PARTICLES="${ROBOCUP_MARKER_PARTICLES:-800}"
+  export ROBOCUP_MARKER_INITIAL_PARTICLES="${ROBOCUP_MARKER_INITIAL_PARTICLES:-6000}"
+  export ROBOCUP_MARKER_PARTICLES="${ROBOCUP_MARKER_PARTICLES:-2000}"
   export ROBOCUP_MARKER_INITIAL_OUTER_X_M="${ROBOCUP_MARKER_INITIAL_OUTER_X_M:-0.8}"
   export ROBOCUP_MARKER_INITIAL_OUTER_Y_M="${ROBOCUP_MARKER_INITIAL_OUTER_Y_M:-0.8}"
   export ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M="${ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M:-0.3}"
@@ -180,13 +191,42 @@ configure_g1_localization_defaults() {
   export ROBOCUP_MARKER_FAR_CONFIDENCE_MAX="${ROBOCUP_MARKER_FAR_CONFIDENCE_MAX:-65}"
   export ROBOCUP_MARKER_MIN_COUNT="${ROBOCUP_MARKER_MIN_COUNT:-3}"
   export ROBOCUP_MARKER_RESIDUAL_TOLERANCE="${ROBOCUP_MARKER_RESIDUAL_TOLERANCE:-0.35}"
+  export ROBOCUP_MARKER_INITIAL_RESIDUAL_TOLERANCE="${ROBOCUP_MARKER_INITIAL_RESIDUAL_TOLERANCE:-0.28}"
+  export ROBOCUP_MARKER_INITIAL_CONFIRM_COUNT="${ROBOCUP_MARKER_INITIAL_CONFIRM_COUNT:-2}"
+  export ROBOCUP_MARKER_INITIAL_CONFIRM_TRANSLATION_M="${ROBOCUP_MARKER_INITIAL_CONFIRM_TRANSLATION_M:-0.7}"
+  export ROBOCUP_MARKER_INITIAL_CONFIRM_ROTATION_DEG="${ROBOCUP_MARKER_INITIAL_CONFIRM_ROTATION_DEG:-35}"
   export ROBOCUP_MARKER_CONVERGE_TOLERANCE="${ROBOCUP_MARKER_CONVERGE_TOLERANCE:-0.30}"
   export ROBOCUP_MARKER_RESIDUAL_DISTANCE_POWER="${ROBOCUP_MARKER_RESIDUAL_DISTANCE_POWER:-0.70}"
   export ROBOCUP_FUSION_MARKER_ALPHA="${ROBOCUP_FUSION_MARKER_ALPHA:-0.05}"
   export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M:-0.7}"
   export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG:-40}"
   export ROBOCUP_FUSION_INIT_FROM_RGBD="${ROBOCUP_FUSION_INIT_FROM_RGBD:-0}"
-  export ROBOCUP_G1_READY_STABLE_LOC="${ROBOCUP_G1_READY_STABLE_LOC:-1}"
+  export ROBOCUP_G1_BALL_FALLBACK_TTL_SEC="${ROBOCUP_G1_BALL_FALLBACK_TTL_SEC:-5}"
+  export ROBOCUP_G1_BALL_MIN_SCORE="${ROBOCUP_G1_BALL_MIN_SCORE:-0.6}"
+  export ROBOCUP_DETECT_LOG_EVERY_N="${ROBOCUP_DETECT_LOG_EVERY_N:-1}"
+
+  if [[ "$ROBOCUP_G1_USE_FUSION" == "1" ]]; then
+    # Fusion mode: marker_locator publishes absolute marker poses to an intermediate topic;
+    # location_fusion publishes the final rt/locationresults consumed by fw_salvador.
+    export ROBOCUP_MARKER_LOCATION_TOPIC="${ROBOCUP_MARKER_LOCATION_TOPIC:-rt/locationresults_marker}"
+    export ROBOCUP_FUSED_LOCATION_TOPIC="${ROBOCUP_FUSED_LOCATION_TOPIC:-rt/locationresults}"
+    export ROBOCUP_MARKER_PUBLISH_CONTINUOUS="${ROBOCUP_MARKER_PUBLISH_CONTINUOUS:-0}"
+    export ROBOCUP_G1_READY_STABLE_LOC="${ROBOCUP_G1_READY_STABLE_LOC:-1}"
+    export ROBOCUP_G1_LOC_UNSTABLE_QUALITY="${ROBOCUP_G1_LOC_UNSTABLE_QUALITY:-0.0}"
+  else
+    # Direct-marker mode: do not run fusion. Publish marker localization directly as the final
+    # rt/locationresults topic so G1 does not drift via RGB-D/robot odometry fusion.
+    export ROBOCUP_MARKER_LOCATION_TOPIC="${ROBOCUP_MARKER_LOCATION_TOPIC:-rt/locationresults}"
+    export ROBOCUP_MARKER_PUBLISH_CONTINUOUS="${ROBOCUP_MARKER_PUBLISH_CONTINUOUS:-1}"
+    # Keep the G1 location filter enabled in marker-direct mode to hold the last plausible pose
+    # across sudden ambiguous marker relocalization jumps. Rejected jumps keep nonzero quality so
+    # LocalizeAgent does not override Ready walking while the filter is holding a recent pose.
+    export ROBOCUP_G1_READY_STABLE_LOC="${ROBOCUP_G1_READY_STABLE_LOC:-1}"
+    export ROBOCUP_G1_LOC_STABLE_SEC="${ROBOCUP_G1_LOC_STABLE_SEC:-2.0}"
+    export ROBOCUP_G1_LOC_JUMP_TRANSLATION_M="${ROBOCUP_G1_LOC_JUMP_TRANSLATION_M:-1.2}"
+    export ROBOCUP_G1_LOC_JUMP_ROTATION_DEG="${ROBOCUP_G1_LOC_JUMP_ROTATION_DEG:-60}"
+    export ROBOCUP_G1_LOC_UNSTABLE_QUALITY="${ROBOCUP_G1_LOC_UNSTABLE_QUALITY:-0.9}"
+  fi
 }
 
 configure_g1_localization_defaults
@@ -211,7 +251,8 @@ build_runtime_if_needed() {
   local marker_bin="$root/robocup_locator_v1.1/build/test_location"
   local fusion_bin="$root/robocup_locator_v1.1/build/location_fusion"
 
-  if [[ -x "$servo_bin" && -x "$detect_bin" && -x "$marker_bin" && -x "$fusion_bin" ]]; then
+  if [[ -x "$servo_bin" && -x "$detect_bin" && -x "$marker_bin" &&
+        ( "$ROBOCUP_G1_USE_FUSION" != "1" || -x "$fusion_bin" ) ]]; then
     return
   fi
 
@@ -388,7 +429,9 @@ require_file "$SERVO_BIN"
 require_file "$DETECT_BIN"
 require_file "$YOLO_ENGINE"
 require_file "$MARKER_BIN"
-require_file "$FUSION_BIN"
+if [[ "$ROBOCUP_G1_USE_FUSION" == "1" ]]; then
+  require_file "$FUSION_BIN"
+fi
 require_file "$LOC_CONFIG"
 require_file "$REAL_BIN"
 
@@ -406,7 +449,11 @@ cat <<INFO
 [g1] iface: $IFACE
 [g1] logs: $LOG_DIR
 [g1] detect_display=$DETECT_DISPLAY marker_display=$MARKER_DISPLAY
+[g1] localization=$([[ "$ROBOCUP_G1_USE_FUSION" == "1" ]] && echo "fusion" || echo "marker-direct")
+[g1] marker_topic=$ROBOCUP_MARKER_LOCATION_TOPIC
 [g1] servo_serial=$ROBOCUP_SERVO_SERIAL
+[g1] ball_min_score=$ROBOCUP_G1_BALL_MIN_SCORE ball_fallback_ttl_sec=$ROBOCUP_G1_BALL_FALLBACK_TTL_SEC
+[g1] detect_log_every_n=$ROBOCUP_DETECT_LOG_EVERY_N
 [g1] fw_args=${FW_ARGS[*]}
 INFO
 
@@ -428,13 +475,17 @@ sleep 3
 
 start_bg marker_locator \
   "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
-  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ROBOCUP_MARKER_SERVO_SCAN="${ROBOCUP_MARKER_SERVO_SCAN:-0}" ./test_location "$IFACE" ../config.yaml "$MARKER_DISPLAY"
+  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ROBOCUP_MARKER_LOCATION_TOPIC="$ROBOCUP_MARKER_LOCATION_TOPIC" ROBOCUP_MARKER_PUBLISH_CONTINUOUS="$ROBOCUP_MARKER_PUBLISH_CONTINUOUS" ROBOCUP_MARKER_SERVO_SCAN="${ROBOCUP_MARKER_SERVO_SCAN:-0}" ./test_location "$IFACE" ../config.yaml "$MARKER_DISPLAY"
 sleep 2
 
-start_bg location_fusion \
-  "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
-  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./location_fusion "$IFACE"
-sleep 2
+if [[ "$ROBOCUP_G1_USE_FUSION" == "1" ]]; then
+  start_bg location_fusion \
+    "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
+    env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./location_fusion "$IFACE"
+  sleep 2
+else
+  echo "[g1] location_fusion disabled; marker_locator publishes rt/locationresults directly."
+fi
 
 FW_LOG="$LOG_DIR/fw_salvador.log"
 echo "[g1] start fw_salvador"
@@ -459,7 +510,9 @@ echo "[g1] stack started. Following fw_salvador log; press Ctrl-C to stop all mo
 echo "[g1] other logs:"
 echo "  tail -f $LOG_DIR/football_detect.log"
 echo "  tail -f $LOG_DIR/marker_locator.log"
-echo "  tail -f $LOG_DIR/location_fusion.log"
+if [[ "$ROBOCUP_G1_USE_FUSION" == "1" ]]; then
+  echo "  tail -f $LOG_DIR/location_fusion.log"
+fi
 echo
 tail -n +1 -F "$FW_LOG" &
 TAIL_PID="$!"

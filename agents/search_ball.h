@@ -9,6 +9,10 @@
 #include "stl_ext.h"
 #include "team_strategy_pub_sub.h"
 
+#ifdef ROBOT_MODEL_G1
+#include "g1_ball_fallback.h"
+#endif
+
 class BallSearchAgent : public AgentBase {
 public:
     BallSearchAgent() : AgentBase("BallSearch") {}
@@ -33,6 +37,9 @@ private:
     htwk::ChannelSubscriber<std::optional<TeamComData>> striker_sub =
             striker_channel.create_subscriber();
     htwk::ChannelSubscriber<LocPosition> pos_sub = loc_position_channel.create_subscriber();
+#ifdef ROBOT_MODEL_G1
+    htwk::g1::BallFallbackMemory g1_ball_fallback;
+#endif
     Side ballLastSide = Side::LEFT;
     int64_t ballLastSeen = 0;
     int64_t strikerBallLastSeen = 0;
