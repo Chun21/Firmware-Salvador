@@ -150,11 +150,9 @@ Run this on the G1 from `build-g1/deploy`:
 ```bash
 cd build-g1/deploy
 
-ROBOCUP_RGBD_INIT_X=0.0 \
-ROBOCUP_RGBD_INIT_Y=-3.0 \
-ROBOCUP_RGBD_INIT_THETA_DEG=90 \
 ROBOCUP_SERVO_SERIAL=/dev/ttyUSB0 \
 DETECT_DISPLAY=1 \
+MARKER_DISPLAY=1 \
 ./run_g1.sh --gc
 ```
 
@@ -174,9 +172,14 @@ Useful environment variables:
 | --- | --- |
 | `G1_NETWORK_INTERFACE` | DDS network interface. Defaults to `eth0`. |
 | `ROBOCUP_SERVO_SERIAL` | Head-servo serial device, for example `/dev/ttyUSB0`. |
-| `ROBOCUP_RGBD_INIT_X` | Initial field-frame x position for RGB-D odometry. |
-| `ROBOCUP_RGBD_INIT_Y` | Initial field-frame y position for RGB-D odometry. |
-| `ROBOCUP_RGBD_INIT_THETA_DEG` | Initial heading in degrees. |
+| `ROBOCUP_MARKER_INITIAL_PARTICLES` | Initial marker-localization particle count. Defaults to `1200`. |
+| `ROBOCUP_MARKER_PARTICLES` | Marker-localization particle count after initial odom calibration. Defaults to `300`. |
+| `ROBOCUP_MARKER_INITIAL_OUTER_X_M` | Extra initial search margin behind own goal line. Defaults to `0.8`. |
+| `ROBOCUP_MARKER_INITIAL_OUTER_Y_M` | Extra initial search margin outside sidelines. Defaults to `0.8`. |
+| `ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M` | Initial search may extend this far into the opponent half. Defaults to `0.3`. |
+| `ROBOCUP_RGBD_INIT_X/Y/THETA_DEG` | Optional fixed RGB-D initial pose. Not required for marker localization by default. |
+| `ROBOCUP_MARKER_PRIOR_FROM_RGBD=1` | Opt in to reusing `ROBOCUP_RGBD_INIT_*` as the marker-localizer prior. Disabled by default. |
+| `ROBOCUP_FUSION_INIT_FROM_RGBD=1` | Opt in to initializing fused field pose from RGB-D. Disabled by default; fusion waits for marker initialization. |
 | `DETECT_DISPLAY=1` | Show the YOLO detection window. |
 | `MARKER_DISPLAY=1` | Show marker/localization debug display. |
 | `ROBOCUP_G1_READY_STABLE_LOC=1` | Enable G1 localization stability filtering before Ready walking. Enabled by default; set to `0` to disable. |
@@ -189,8 +192,10 @@ Useful environment variables:
 
 The launcher automatically adds `--gc` if no GameController flag is provided.
 
-When `ROBOCUP_RGBD_INIT_X/Y/THETA_DEG` are set, `run_g1.sh` also uses them as the marker
-localizer prior automatically.  The G1 defaults are deliberately mild: marker detections below
+By default, G1 marker localization does not depend on a fixed `ROBOCUP_RGBD_INIT_*` entry pose.
+Before odometry is calibrated it randomly searches our half plus a small outside margin:
+on a 9x6 field the default area is approximately `x=[-5.3,0.3]`, `y=[-3.8,3.8]`.
+The G1 defaults are deliberately mild: marker detections below
 confidence `40` are ignored, far marker detections require gradually higher confidence, marker
 corrections are blended with alpha `0.05`, and marker poses that disagree with the current
 fused/odometry pose by more than `0.7 m` or `40°` are rejected

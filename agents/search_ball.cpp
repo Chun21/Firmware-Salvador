@@ -7,6 +7,10 @@
 #include "moveballorder.h"
 #include "walktopositionorder.h"
 
+#ifdef ROBOT_MODEL_G1
+#include "g1_ball_behavior.h"
+#endif
+
 MotionCommand BallSearchAgent::proceed(std::shared_ptr<Order> order) {
     std::optional<RelBall> ball = ball_sub.latest();
     updateBallDirectionMemory(ball);
@@ -20,6 +24,9 @@ MotionCommand BallSearchAgent::proceed(std::shared_ptr<Order> order) {
                                WalkToPositionOrder::Mode::STRIKER) ||
                       isOrder<MoveBallOrder>(order) || isOrder<MoveBallGoalOrder>(order);
     std::optional<TeamComData> striker = striker_sub.latest();
+#ifdef ROBOT_MODEL_G1
+    bool g1_force_body_search = false;
+#endif
     if (isOrder<WalkToPositionOrder>(order)) {
         auto* wtp_order = dynamic_cast<WalkToPositionOrder*>(order.get());
         if (wtp_order->mode == WalkToPositionOrder::Mode::USE_A ||
@@ -29,11 +36,23 @@ MotionCommand BallSearchAgent::proceed(std::shared_ptr<Order> order) {
             pos_sub.latest().position.point().dist(wtp_order->pos.point()) > 1.f) {
             return MotionCommand::Nothing;
         }
+#ifdef ROBOT_MODEL_G1
+        if (!ball && wtp_order->mode == WalkToPositionOrder::Mode::STRIKER &&
+            pos_sub.latest().position.point().dist(wtp_order->pos.point()) <= 0.3f) {
+            g1_force_body_search = true;
+        }
+#endif
         if (wtp_order->mode == WalkToPositionOrder::Mode::SUPPORTER && striker && striker->ball)
             return MotionCommand::Nothing;
     }
     if (isOrder<KeepGoalOrder>(order) && striker && striker->ball)
         return MotionCommand::Nothing;
+
+#ifdef ROBOT_MODEL_G1
+    if (g1_force_body_search) {
+        return g1BallSearchCommand(ballLastSide == Side::LEFT);
+    }
+#endif
 
     const int64_t nearResponseTime = is_striker ? 2._s : .75_s;
     const int64_t farResponseTime = 2._s;

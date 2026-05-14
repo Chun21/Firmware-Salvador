@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr float kMaxForwardSpeed = 0.45f;
+constexpr float kMaxForwardSpeed = 1.00f;
 constexpr float kMaxBackwardSpeed = 0.15f;
 constexpr float kMaxSideSpeed = 0.25f;
 constexpr float kMaxYawSpeed = 0.60f;
@@ -113,7 +113,21 @@ void MotionConnector::sendWalk(const MotionCommand::WalkRequest& walk_request,
                                const YawPitch& head_angles) {
     sendHead(head_angles);
     const MotionCommand::WalkRequest limited = limitWalkRequest(walk_request);
-    client.Move(limited.dx, limited.dy, limited.da);
+    const int64_t now = time_us();
+    if (now - last_walk_log_us > 500_ms) {
+        LOG_F(INFO,
+              "G1 sendWalk requested=(dx=%.3f dy=%.3f da=%.3f) limited=(dx=%.3f dy=%.3f "
+              "da=%.3f) head=(yaw=%.1fdeg pitch=%.1fdeg)",
+              walk_request.dx, walk_request.dy, walk_request.da, limited.dx, limited.dy,
+              limited.da, radToDeg(head_angles.yaw), radToDeg(head_angles.pitch));
+        last_walk_log_us = now;
+    }
+    const int32_t move_ret = client.Move(limited.dx, limited.dy, limited.da);
+    if (move_ret != 0 && now - last_move_error_us > 1_s) {
+        LOG_F(WARNING, "G1 LocoClient::Move rejected command: ret=%d dx=%.3f dy=%.3f da=%.3f",
+              move_ret, limited.dx, limited.dy, limited.da);
+        last_move_error_us = now;
+    }
     last_sent_walk = limited;
     standing = false;
 }

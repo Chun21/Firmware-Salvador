@@ -110,19 +110,20 @@ int ParticleFilter::genParticles()
         return 1;
     }
 
-    Eigen::ArrayXd rands = (Eigen::ArrayXd::Random(num) + 1) / 2;
+    const unsigned long long seed =
+        chr::duration_cast<std::chrono::microseconds>(
+            chr::system_clock::now().time_since_epoch()).count();
+    std::mt19937 rng(static_cast<std::mt19937::result_type>(seed));
+    const double step = 1.0 / static_cast<double>(num);
+    std::uniform_real_distribution<double> start_dist(0.0, step);
+    double u = start_dist(rng);
+    int j = 0;
 
-    for (int i = 0; i < num && i < rands.size(); i++) {
-        double rand = rands(i);
-        int j = 0;
-        
-        while (j < old_hypos.rows() && old_hypos(j, 5) < rand) {
+    for (int i = 0; i < num; i++, u += step) {
+        while (j < old_hypos.rows() - 1 && old_hypos(j, 5) < u) {
             j++;
         }
-
-        if (j < old_hypos.rows()) {
-            hypos.row(i).head(3) = old_hypos.row(j).head(3);
-        }
+        hypos.row(i).head(3) = old_hypos.row(j).head(3);
     }
 
     offsetX *= offsetShrinkRatio;

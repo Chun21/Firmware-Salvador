@@ -4,9 +4,11 @@
 check_success() {
   if [ $? -ne 0 ]; then
       echo "❌ Error: $1"
-      docker run --rm --network host -v $TOOLCHAIN_VOLUME:/l4t -v $(pwd):$(pwd) $CONTAINER_NAME bash -c "
-         chown -R $USER_ID:$GROUP_ID /workspaces/firmware_6.0
-       "
+      if [[ -n "${TOOLCHAIN_VOLUME:-}" ]]; then
+          docker run --rm --network host -v "$TOOLCHAIN_VOLUME:/l4t" -v "$(pwd):$(pwd)" "$CONTAINER_NAME" bash -c "
+             chown -R $USER_ID:$GROUP_ID /workspaces/firmware_6.0
+           " || true
+      fi
     exit 1
   else
     echo "✅ Success: $1"
@@ -148,19 +150,27 @@ done
 export G1_NETWORK_INTERFACE="$IFACE"
 
 configure_g1_localization_defaults() {
-  # Keep startup simple: when the user provides the RGB-D initial pose, reuse it as the
-  # marker-locator prior.  The defaults are intentionally mild: odom/RGB-D remains the
-  # main estimate, while marker localization can correct it only when reasonably consistent.
-  if [[ -n "${ROBOCUP_RGBD_INIT_X:-}" ]]; then
-    export ROBOCUP_MARKER_PRIOR_X="${ROBOCUP_MARKER_PRIOR_X:-$ROBOCUP_RGBD_INIT_X}"
-  fi
-  if [[ -n "${ROBOCUP_RGBD_INIT_Y:-}" ]]; then
-    export ROBOCUP_MARKER_PRIOR_Y="${ROBOCUP_MARKER_PRIOR_Y:-$ROBOCUP_RGBD_INIT_Y}"
-  fi
-  if [[ -n "${ROBOCUP_RGBD_INIT_THETA_DEG:-}" ]]; then
-    export ROBOCUP_MARKER_PRIOR_THETA_DEG="${ROBOCUP_MARKER_PRIOR_THETA_DEG:-$ROBOCUP_RGBD_INIT_THETA_DEG}"
+  # Keep startup simple and do not require a fixed entry pose. By default the marker locator
+  # performs a larger initial search over our half plus a small outside margin. If a fixed
+  # RGB-D entry pose is desired, set ROBOCUP_MARKER_PRIOR_FROM_RGBD=1 explicitly.
+  if [[ "${ROBOCUP_MARKER_PRIOR_FROM_RGBD:-0}" == "1" ]]; then
+    if [[ -n "${ROBOCUP_RGBD_INIT_X:-}" ]]; then
+      export ROBOCUP_MARKER_PRIOR_X="${ROBOCUP_MARKER_PRIOR_X:-$ROBOCUP_RGBD_INIT_X}"
+    fi
+    if [[ -n "${ROBOCUP_RGBD_INIT_Y:-}" ]]; then
+      export ROBOCUP_MARKER_PRIOR_Y="${ROBOCUP_MARKER_PRIOR_Y:-$ROBOCUP_RGBD_INIT_Y}"
+    fi
+    if [[ -n "${ROBOCUP_RGBD_INIT_THETA_DEG:-}" ]]; then
+      export ROBOCUP_MARKER_PRIOR_THETA_DEG="${ROBOCUP_MARKER_PRIOR_THETA_DEG:-$ROBOCUP_RGBD_INIT_THETA_DEG}"
+    fi
   fi
 
+  export ROBOCUP_MARKER_INITIAL_PARTICLES="${ROBOCUP_MARKER_INITIAL_PARTICLES:-2500}"
+  export ROBOCUP_MARKER_PARTICLES="${ROBOCUP_MARKER_PARTICLES:-800}"
+  export ROBOCUP_MARKER_INITIAL_OUTER_X_M="${ROBOCUP_MARKER_INITIAL_OUTER_X_M:-0.8}"
+  export ROBOCUP_MARKER_INITIAL_OUTER_Y_M="${ROBOCUP_MARKER_INITIAL_OUTER_Y_M:-0.8}"
+  export ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M="${ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M:-0.3}"
+  export ROBOCUP_MARKER_USE_INITIAL_PRIOR="${ROBOCUP_MARKER_USE_INITIAL_PRIOR:-0}"
   export ROBOCUP_MARKER_PRIOR_X_WINDOW_M="${ROBOCUP_MARKER_PRIOR_X_WINDOW_M:-1.0}"
   export ROBOCUP_MARKER_PRIOR_Y_WINDOW_M="${ROBOCUP_MARKER_PRIOR_Y_WINDOW_M:-1.0}"
   export ROBOCUP_MARKER_PRIOR_THETA_WINDOW_DEG="${ROBOCUP_MARKER_PRIOR_THETA_WINDOW_DEG:-60}"
@@ -175,6 +185,7 @@ configure_g1_localization_defaults() {
   export ROBOCUP_FUSION_MARKER_ALPHA="${ROBOCUP_FUSION_MARKER_ALPHA:-0.05}"
   export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_M:-0.7}"
   export ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG="${ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG:-40}"
+  export ROBOCUP_FUSION_INIT_FROM_RGBD="${ROBOCUP_FUSION_INIT_FROM_RGBD:-0}"
   export ROBOCUP_G1_READY_STABLE_LOC="${ROBOCUP_G1_READY_STABLE_LOC:-1}"
 }
 
@@ -417,7 +428,7 @@ sleep 3
 
 start_bg marker_locator \
   "$ROBOCUP_ROOT/robocup_locator_v1.1/build" \
-  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ./test_location "$IFACE" ../config.yaml "$MARKER_DISPLAY"
+  env LD_LIBRARY_PATH="$RUNTIME_LD_LIBRARY_PATH" ROBOCUP_MARKER_SERVO_SCAN="${ROBOCUP_MARKER_SERVO_SCAN:-0}" ./test_location "$IFACE" ../config.yaml "$MARKER_DISPLAY"
 sleep 2
 
 start_bg location_fusion \

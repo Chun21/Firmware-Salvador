@@ -7,6 +7,11 @@
 #include "moveballgoalorder.h"
 #include "walktopositionorder.h"
 
+#ifdef ROBOT_MODEL_G1
+#include "g1_ball_behavior.h"
+#include "g1_ready_walk.h"
+#endif
+
 using namespace htwk;
 using namespace std;
 
@@ -147,6 +152,18 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
         focus = HeadFocus::LOC;
     }
 
+#ifdef ROBOT_MODEL_G1
+    const auto* walk_to_position_order = dynamic_cast<WalkToPositionOrder*>(order.get());
+    const bool g1_ball_walk_order =
+            isOrder<MoveBallGoalOrder>(order) ||
+            (walk_to_position_order != nullptr &&
+             walk_to_position_order->mode == WalkToPositionOrder::Mode::STRIKER &&
+             focus == HeadFocus::BALL && gc_state_sub.latest().state == GameState::Playing);
+    if (g1_ball_walk_order) {
+        return g1TurnForwardToBallCommand(dest_rel, focus);
+    }
+#endif
+
     // Ignore the whole "we-walk-around-stuff" if we are close to the target (1m) and didn't get an
     // explicit obstacle to avoid from the Order or if we're in FOCUS_DIRECTION mode.
     bool close_obstacle = false;
@@ -161,6 +178,12 @@ MotionCommand WalkToPositionAgent::proceed(std::shared_ptr<Order> order) {
             std::abs(normalizeRotation(dest.a - current_pos->position.a)) < 90_deg) {
             focus = HeadFocus::BALL_GOALIE;
         }
+#ifdef ROBOT_MODEL_G1
+        if (gc_state_sub.latest().state == GameState::Ready && isOrder<WalkToPositionOrder>(order)) {
+            return g1ReadyWalkCommand(dest_rel,
+                                      normalizeRotation(dest.a - current_pos->position.a), focus);
+        }
+#endif
         return MotionCommand::Walk(
                 {.dx = clamp(dest_rel.x * 1.f, -0.15f, 1.0f),
                  .dy = clamp(dest_rel.y * 1.f, -.75f, .75f),

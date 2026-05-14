@@ -15,6 +15,10 @@
 #include "stl_ext.h"
 #include "unordered_map"
 
+#ifdef ROBOT_MODEL_G1
+#include "g1_ball_behavior.h"
+#endif
+
 static point_2d dribblingDirection(const point_2d& pos) {
     static float h_length = SoccerField::fieldLength() / 2.f;
     static float h_width = SoccerField::fieldWidth() / 2.f;
@@ -94,6 +98,10 @@ MotionCommand DribbleAgent::proceed(std::shared_ptr<Order> order) {
     }
     if (rel_ball->pos_rel.norm() > 3.0f)  // change also in walkToPos!
         return MotionCommand::Nothing;
+
+#ifdef ROBOT_MODEL_G1
+    return g1ConservativeDribbleCommand(rel_ball->pos_rel);
+#endif
 
     htwk::Position robot_pos = loc_position->position;
 

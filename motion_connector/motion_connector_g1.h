@@ -36,6 +36,8 @@ private:
     MotionCommand::WalkRequest last_sent_walk{};
     YawPitch last_sent_head{};
     int64_t last_motion_us = 0;
+    int64_t last_walk_log_us = 0;
+    int64_t last_move_error_us = 0;
     int64_t last_joint_control_error_us = 0;
     bool standing = false;
 
@@ -47,4 +49,3 @@ private:
 };
 
 #endif  // ROBOT_MODEL_G1
-

@@ -87,7 +87,7 @@ double ComputeScanPitchDeg(double elapsed_sec,
 int main(int argc, char *argv[])
 {
 
-    if (argc < 3) {// At least need networkInterface and config_file 
+    if (argc < 3) {// At least need networkInterface and config_file
         std::cout << "Usage: " << argv[0] << " [networkInterface] [config_file] [is_display]" << std::endl;
         return -1;
     }
@@ -95,7 +95,7 @@ int main(int argc, char *argv[])
     std::string env_cfg_path = "../config.yaml";// Default config file path
     if (argc >= 3) {
         env_cfg_path = argv[2];
-    } 
+    }
 
     bool is_display = false;// Default: no display
     if (argc == 4 && strcmp(argv[3], "1") == 0) {
@@ -103,7 +103,7 @@ int main(int argc, char *argv[])
     }
 
     unitree::robot::ChannelFactory::Instance()->Init(0, argv[1]);// Initialize communication module
-    
+
     // Create servo Subscriber 舵机订阅器
     std::shared_ptr<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorStates_>> servoState;
     servoState = std::make_shared<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorStates_>>("rt/g1_comp_servo/state");
@@ -113,7 +113,7 @@ int main(int argc, char *argv[])
     std::shared_ptr<unitree::robot::SubscriptionBase<unitree_hg::msg::dds_::LowState_>> lowState;
     lowState = std::make_shared<unitree::robot::SubscriptionBase<unitree_hg::msg::dds_::LowState_>>("rt/lowstate");
 
-    // Create Odometry Subscriber  里程计订阅器 
+    // Create Odometry Subscriber  里程计订阅器
     std::shared_ptr<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::SportModeState_>> odomState;
     odomState = std::make_shared<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::SportModeState_>>("rt/lf/odommodestate");
 
@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
     const std::string marker_location_topic_name =
         GetEnvOrDefault(kMarkerLocationTopicEnv, kDefaultMarkerLocationTopic);
     std::cout << "Marker absolute location topic: " << marker_location_topic_name << std::endl;
-    std::unique_ptr<unitree::robot::RealTimePublisher<LocationModule::LocationResult>> posePub; 
+    std::unique_ptr<unitree::robot::RealTimePublisher<LocationModule::LocationResult>> posePub;
     posePub = std::make_unique<unitree::robot::RealTimePublisher<LocationModule::LocationResult>>(marker_location_topic_name);
 
     std::unique_ptr<unitree::robot::RealTimePublisher<unitree_go::msg::dds_::MotorCmds_>> servoCmd;
@@ -159,14 +159,14 @@ int main(int argc, char *argv[])
     double localization_yaw_scan_limit_deg = config.ReadFloatFromYaml("localization_servo", "yaw_scan_limit_deg");
     double localization_yaw_scan_speed_deg_per_sec =
         config.ReadFloatFromYaml("localization_servo", "yaw_scan_speed_deg_per_sec");
-    const bool marker_controls_servo = GetEnvBool("ROBOCUP_MARKER_SERVO_SCAN", true);
+    const bool marker_controls_servo = GetEnvBool("ROBOCUP_MARKER_SERVO_SCAN", false);
     const double scan_pitch_start_deg = GetEnvDouble("ROBOCUP_MARKER_SCAN_PITCH_START_DEG", 25.0);
     const double scan_pitch_end_deg = GetEnvDouble("ROBOCUP_MARKER_SCAN_PITCH_END_DEG", 60.0);
     const double scan_pitch_speed_deg_per_sec =
         GetEnvDouble("ROBOCUP_MARKER_SCAN_PITCH_SPEED_DEG_PER_SEC", 3.0);
     std::cout << "Marker locator servo scan control: "
               << (marker_controls_servo ? "enabled" : "disabled")
-              << " (set ROBOCUP_MARKER_SERVO_SCAN=0 to disable), "
+              << " (set ROBOCUP_MARKER_SERVO_SCAN=1 to enable), "
               << "pitch_scan_raw_deg=[" << scan_pitch_start_deg << ", " << scan_pitch_end_deg
               << "] speed=" << scan_pitch_speed_deg_per_sec << " deg/s" << std::endl;
 
@@ -205,7 +205,7 @@ int main(int argc, char *argv[])
         locator.robotPoseToOdom.y = odomState->msg_.position()[1] * odometry_factor; //获取Y坐标准确位置
         locator.robotPoseToOdom.theta = odomState->msg_.imu_state().rpy()[2];//获取航向角准确位置
 
-        std::cout << "Odometer information: (" 
+        std::cout << "Odometer information: ("
                     << locator.robotPoseToOdom.x << ", "
                     << locator.robotPoseToOdom.y << ", "
                     << locator.robotPoseToOdom.theta << ")" << std::endl;//输出信息
@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
         double servo_yaw_angle = servoState -> msg_.states()[0].q();//舵机yaw角度
         double servo_pitch_angle = servoState -> msg_.states()[1].q() + servo_pitch_compensation;//舵机pitch角度加补偿
 	    Pose p_eye2base = Pose(0, -servo_height, 0, deg2rad(servo_pitch_angle), -deg2rad(wrist_yaw_angle) - deg2rad(servo_yaw_angle), 0) ;//
-	
+
         std::cout << "Servo information: "
                  << "wrist_yaw_angle(" << wrist_yaw_angle << "), "
                  << "servo_yaw_angle(" << servo_yaw_angle << "), "
@@ -230,33 +230,39 @@ int main(int argc, char *argv[])
                 if (det_results.size() > 0) {
                     locator.processDetections(det_results, p_eye2base);
                     marker_pose_updated = locator.selfLocate() || marker_pose_updated;
-                }   
+                }
             }
         }//
-        
+
         // Publish only fresh marker-based absolute corrections.
         // The final fused pose is published by location_fusion.
-        if (marker_pose_updated && locator.odomCalibrated) {
+        //
+        // For display, however, keep the robot icon live even when no new marker
+        // correction was accepted in this cycle: apply the latest odom->field
+        // transform to current odometry every frame.
+        if (locator.odomCalibrated) {
 
             transCoord(
                 locator.robotPoseToOdom.x, locator.robotPoseToOdom.y, locator.robotPoseToOdom.theta,
                 locator.odomToField.x, locator.odomToField.y, locator.odomToField.theta,
                 locator.robotPoseToField.x, locator.robotPoseToField.y, locator.robotPoseToField.theta);
 
-            std::cout << "== Final RobotToFiled: (" 
-                            << locator.robotPoseToField.x << ", " 
-                            << locator.robotPoseToField.y << ", " 
-                            << locator.robotPoseToField.theta << ")" << std::endl;
+            if (marker_pose_updated) {
+                std::cout << "== Final RobotToFiled: ("
+                                << locator.robotPoseToField.x << ", "
+                                << locator.robotPoseToField.y << ", "
+                                << locator.robotPoseToField.theta << ")" << std::endl;
 
-            posePub -> msg_.robot2field_x() = locator.robotPoseToField.x;
-            posePub -> msg_.robot2field_y() = locator.robotPoseToField.y;
-            posePub -> msg_.robot2field_theta() = locator.robotPoseToField.theta;
-            posePub -> unlockAndPublish();
+                posePub -> msg_.robot2field_x() = locator.robotPoseToField.x;
+                posePub -> msg_.robot2field_y() = locator.robotPoseToField.y;
+                posePub -> msg_.robot2field_theta() = locator.robotPoseToField.theta;
+                posePub -> unlockAndPublish();
+            }
 
             if (is_display) {
                 locator.display_board -> displayRobotPose(locator.robotPoseToField.x, locator.robotPoseToField.y, locator.robotPoseToField.theta);
             }
-            
+
         }
 
         if (is_display) {

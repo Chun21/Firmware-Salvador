@@ -60,6 +60,10 @@ private:
     HeadFocus last_focus = HeadFocus::NOTHING;
     int64_t last_time = 0;
     float time_step = 0;
+#ifdef ROBOT_MODEL_G1
+    int64_t g1_unstable_loc_since_us = 0;
+    bool g1_loc_scan_was_active = false;
+#endif
     // Initialized with true to force time_step calculation in Focus::BALL.
     bool ball_found = true;
     float pitch_base_value = 48_deg;

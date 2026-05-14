@@ -1,8 +1,10 @@
 #include <iostream>
 #include <vector>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
+#include <cctype>
 
 #include "Locator.h"
 #include "types.h"
@@ -32,6 +34,24 @@ double EnvDoubleOrDefault(const char* key, double default_value) {
     return value;
 }
 
+bool EnvBoolOrDefault(const char* key, bool default_value) {
+    const char* raw = std::getenv(key);
+    if (raw == nullptr || raw[0] == '\0') {
+        return default_value;
+    }
+    std::string value(raw);
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (value == "1" || value == "true" || value == "yes" || value == "on") {
+        return true;
+    }
+    if (value == "0" || value == "false" || value == "no" || value == "off") {
+        return false;
+    }
+    return default_value;
+}
+
 void ApplyOptionalInitialPrior(PoseBox2D& constraints) {
     double prior_x = 0.0;
     double prior_y = 0.0;
@@ -55,6 +75,20 @@ void ApplyOptionalInitialPrior(PoseBox2D& constraints) {
         constraints.thetamin = deg2rad(prior_theta_deg - window_deg);
         constraints.thetamax = deg2rad(prior_theta_deg + window_deg);
     }
+}
+
+void ApplyInitialOwnHalfOuterSearch(PoseBox2D& constraints, const FieldDimensions& fd) {
+    const double outer_x = EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_OUTER_X_M", 0.8);
+    const double outer_y = EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_OUTER_Y_M", 0.8);
+    const double midline_margin =
+        EnvDoubleOrDefault("ROBOCUP_MARKER_INITIAL_MIDLINE_MARGIN_M", 0.3);
+
+    constraints.xmin = -fd.length / 2 - outer_x;
+    constraints.xmax = midline_margin;
+    constraints.ymin = -fd.width / 2 - outer_y;
+    constraints.ymax = fd.width / 2 + outer_y;
+    constraints.thetamin = -M_PI;
+    constraints.thetamax = M_PI;
 }
 
 }  // namespace
@@ -253,7 +287,7 @@ bool Locator::selfLocate() {
         thetaMin = -M_PI / 4;
         thetaMax = M_PI / 4;
     }
-    else if (mode == "center" || (mode == "normal" && !odomCalibrated))
+    else if (mode == "center")
     {
         // Full-field initial search. The old code used xMin=-0.5 and
         // xMax=fd.length/2+2 for half-field testing. On a kid field this
@@ -265,6 +299,20 @@ bool Locator::selfLocate() {
         yMax = fd.width / 2;
         thetaMin = -M_PI;
         thetaMax = M_PI;
+    }
+    else if (mode == "normal" && !odomCalibrated)
+    {
+        // Robot may start just outside the field and walk in from arbitrary
+        // positions on our half.  Search our half plus a small outer margin
+        // instead of requiring a fixed ROBOCUP_RGBD_INIT_* pose.
+        PoseBox2D initialConstraints{};
+        ApplyInitialOwnHalfOuterSearch(initialConstraints, fd);
+        xMin = initialConstraints.xmin;
+        xMax = initialConstraints.xmax;
+        yMin = initialConstraints.ymin;
+        yMax = initialConstraints.ymax;
+        thetaMin = initialConstraints.thetamin;
+        thetaMax = initialConstraints.thetamax;
     }
     else if (mode == "normal" && odomCalibrated)
     {
@@ -285,9 +333,15 @@ bool Locator::selfLocate() {
 
     // Locate
     PoseBox2D constraints{xMin, xMax, yMin, yMax, thetaMin, thetaMax};
-    if (!odomCalibrated && mode == "normal") {
+    if (!odomCalibrated && mode == "normal" &&
+        EnvBoolOrDefault("ROBOCUP_MARKER_USE_INITIAL_PRIOR", false)) {
         ApplyOptionalInitialPrior(constraints);
     }
+    const int num_particles =
+        std::max(1, static_cast<int>(EnvDoubleOrDefault(
+            (!odomCalibrated && mode == "normal") ? "ROBOCUP_MARKER_INITIAL_PARTICLES"
+                                                  : "ROBOCUP_MARKER_PARTICLES",
+            (!odomCalibrated && mode == "normal") ? 1200.0 : 300.0)));
     std::cout << "[Locator] field_size="
               << (fd.length == FD_KIDSIZE.length && fd.width == FD_KIDSIZE.width ? "kid" : "adult")
               << " mode=" << mode
@@ -296,8 +350,9 @@ bool Locator::selfLocate() {
               << " theta_deg=[" << rad2deg(constraints.thetamin) << ","
               << rad2deg(constraints.thetamax) << "]"
               << " marker_count=" << markers.size()
+              << " particles=" << num_particles
               << std::endl;
-    auto res = pf_locator -> locateRobot(markers, constraints);
+    auto res = pf_locator -> locateRobot(markers, constraints, num_particles);
 
     // 0: Success
     // 1: Failure to generate new particles (quantity is 0)

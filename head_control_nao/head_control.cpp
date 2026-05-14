@@ -1,5 +1,8 @@
 #include "head_control.h"
 
+#include <algorithm>
+#include <array>
+
 #include <loguru.hpp>
 
 #include "gc_state.h"
@@ -9,6 +12,48 @@
 #include "stl_ext.h"
 
 namespace htwk {
+
+#ifdef ROBOT_MODEL_G1
+namespace {
+
+YawPitch g1RobocupDeployStyleLocScan(float scan_time_s) {
+    struct Phase {
+        YawPitch target;
+        float duration_s;
+    };
+
+    // Same phase sequence and timing as /home/eai/robocup_deploy roboCup_sdk camFindBall:
+    // (0,0) 200ms, then each of (35,-15), (35,15), (-35,-15), (-35,15), (0,0)
+    // for 500ms. In robocup_deploy this is a one-shot interpolation; after the scan finishes,
+    // the head stays centered while the body may continue searching. Do not continuously
+    // oscillate the G1 head.
+    const std::array<Phase, 6> kPhases{{
+            {YawPitch{0.0f, 0.0f}, 0.2f},
+            {YawPitch{35_deg, -15_deg}, 0.5f},
+            {YawPitch{35_deg, 15_deg}, 0.5f},
+            {YawPitch{-35_deg, -15_deg}, 0.5f},
+            {YawPitch{-35_deg, 15_deg}, 0.5f},
+            {YawPitch{0.0f, 0.0f}, 0.5f},
+    }};
+
+    YawPitch previous{0.0f, 0.0f};
+    float elapsed = scan_time_s;
+    for (const Phase& phase : kPhases) {
+        if (elapsed <= phase.duration_s) {
+            const float alpha = std::clamp(elapsed / phase.duration_s, 0.0f, 1.0f);
+            return YawPitch{
+                    previous.yaw + (phase.target.yaw - previous.yaw) * alpha,
+                    previous.pitch + (phase.target.pitch - previous.pitch) * alpha,
+            };
+        }
+        elapsed -= phase.duration_s;
+        previous = phase.target;
+    }
+    return YawPitch{0.0f, 0.0f};
+}
+
+}  // namespace
+#endif
 
 /**
  * @param w current position
@@ -94,13 +139,39 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
         gc_state.my_team.players[gc_state.player_idx].is_penalized) {
         may_move = false;
     }
-    if (!may_move)
-        return YawPitch{0, 0};
     LocPosition loc_position = loc_position_sub.latest();
     HeadFocus cur_focus = motion_command.focus;
     int64_t time = time_us();
+#ifdef ROBOT_MODEL_G1
+    constexpr float kG1LocScanQualityThreshold = 0.7f;
+    constexpr int64_t kG1LocScanDelayUs = 1_s;
+    const bool g1_loc_unstable = loc_position.quality < kG1LocScanQualityThreshold;
+    if (g1_loc_unstable) {
+        if (g1_unstable_loc_since_us == 0) {
+            g1_unstable_loc_since_us = time;
+        }
+    } else {
+        g1_unstable_loc_since_us = 0;
+    }
+    const bool g1_needs_loc_scan =
+            g1_loc_unstable && time - g1_unstable_loc_since_us >= kG1LocScanDelayUs;
+    if (g1_needs_loc_scan) {
+        // G1 may run the robocup_deploy-style one-shot head scan in every GameController state,
+        // including startup before Ready, but only after localization has been continuously bad
+        // for one second. Body motion is still blocked by the motion connector when the state
+        // forbids movement.
+        cur_focus = HeadFocus::LOC;
+    } else if (!may_move) {
+        return YawPitch{0, 0};
+    } else if (cur_focus == HeadFocus::NOTHING) {
+        cur_focus = HeadFocus::BALL;
+    }
+#else
+    if (!may_move)
+        return YawPitch{0, 0};
     if (cur_focus == HeadFocus::NOTHING)
         cur_focus = loc_position.quality > 0.7f ? HeadFocus::BALL : HeadFocus::LOC;
+#endif
     time_step += (time - last_time) / 1'000'000.f;
 
 #ifdef ROBOT_MODEL_K1
@@ -116,13 +187,25 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
 #endif
 
     if (cur_focus == HeadFocus::LOC) {
+#ifdef ROBOT_MODEL_G1
+        if (!g1_needs_loc_scan) {
+            g1_loc_scan_was_active = false;
+            head_pos = YawPitch{0.0f, 0.0f};
+        } else {
+            if (!g1_loc_scan_was_active)
+                time_step = 0.0f;
+            g1_loc_scan_was_active = true;
+            head_pos = g1RobocupDeployStyleLocScan(time_step);
+        }
+#else
         sta_settings sta_yaw{2, 0.1f, 58_deg};
         if (cur_focus != last_focus)
             time_step = smoothTriAngStartTime(head_pos, sta_yaw);
         head_pos = {smoothTriAng(time_step, sta_yaw), 15_deg};
+#endif
     } else if (cur_focus == HeadFocus::BALL || cur_focus == HeadFocus::BALL_GOALIE) {
-        std::optional<TeamComData> striker = striker_sub.latest();
 #ifdef ROBOT_MODEL_G1
+        g1_loc_scan_was_active = false;
         std::optional<RelBall> rel_ball = rel_ball_sub.latest();
         if (rel_ball && rel_ball->ball_age_us < 2_s) {
             ball_found = true;
@@ -139,6 +222,9 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
             last_time = time;
             return head_pos;
         }
+        std::optional<TeamComData> striker = striker_sub.latest();
+#else
+        std::optional<TeamComData> striker = striker_sub.latest();
 #endif
         std::lock_guard<std::mutex> lck(ball_detection_mtx);
         if (last_ball_percept > time - 2_s) {
@@ -221,6 +307,11 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
     } else {
         head_pos = {0, 0};
     }
+#ifdef ROBOT_MODEL_G1
+    if (cur_focus != HeadFocus::LOC) {
+        g1_loc_scan_was_active = false;
+    }
+#endif
     last_focus = cur_focus;
     last_time = time;
     return head_pos;

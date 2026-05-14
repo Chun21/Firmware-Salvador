@@ -515,7 +515,7 @@ int main(int argc, char** argv) {
     const double marker_max_correction_rad =
         DegToRad(EnvDoubleOrDefault("ROBOCUP_FUSION_MARKER_MAX_CORRECTION_DEG", 40.0));
     const bool use_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_USE_RGBD", true);
-    const bool init_from_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_INIT_FROM_RGBD", true);
+    const bool init_from_rgbd = EnvBoolOrDefault("ROBOCUP_FUSION_INIT_FROM_RGBD", false);
     const bool use_robot_odom = EnvBoolOrDefault("ROBOCUP_FUSION_USE_ROBOT_ODOM", true);
     const double odom_scale_factor = EnvDoubleOrDefault("ROBOCUP_ODOM_SCALE_FACTOR", 1.4);
     const double odom_min_translation_m = EnvDoubleOrDefault("ROBOCUP_FUSION_ODOM_MIN_TRANSLATION_M", 0.001);
