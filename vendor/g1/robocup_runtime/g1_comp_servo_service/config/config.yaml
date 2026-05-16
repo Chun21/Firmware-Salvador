@@ -6,7 +6,7 @@ joint1: [-20, 85]
 direction: [1, -1]
 has_calibrate: 1
 startup_hold_enabled: 1
-# startup_hold_position_deg: [0, 60]
-startup_hold_position_deg: [0, 50]
+# startup_hold_position_deg: [yaw, pitch]
+startup_hold_position_deg: [0, -10]
 # max_speed_deg_per_sec: [90, 60]
 max_speed_deg_per_sec: [45, 30]

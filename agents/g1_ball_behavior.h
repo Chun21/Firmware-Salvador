@@ -28,7 +28,7 @@ inline std::optional<MotionCommand> g1StrikerLostBallSearchCommand(bool has_curr
 
 inline MotionCommand g1TurnForwardToBallCommand(const point_2d& ball_pos_rel,
                                                 HeadFocus focus = HeadFocus::BALL) {
-    constexpr float kMaxForward = 0.55f;
+    constexpr float kMaxForward = 0.80f;
     constexpr float kMinForward = 0.08f;
     constexpr float kMaxYaw = 0.50f;
     constexpr float kWalkAngle = 0.35f;  // about 20 deg
@@ -50,9 +50,10 @@ inline MotionCommand g1TurnForwardToBallCommand(const point_2d& ball_pos_rel,
 }
 
 inline MotionCommand g1ConservativeDribbleCommand(const point_2d& ball_pos_rel) {
-    constexpr float kMaxForward = 0.45f;
-    constexpr float kPushForward = 0.45f;
+    constexpr float kMaxForward = 0.80f;
+    constexpr float kPushForward = 0.80f;
     constexpr float kMinForward = 0.08f;
+    constexpr float kMaxLateral = 0.08f;
     constexpr float kMaxYaw = 0.45f;
     constexpr float kCenterY = 0.07f;
     constexpr float kAlignAngle = 0.16f;  // about 9 deg
@@ -66,18 +67,23 @@ inline MotionCommand g1ConservativeDribbleCommand(const point_2d& ball_pos_rel) 
     float dx = 0.0f;
     float dy = 0.0f;
     float da = std::clamp(ball_angle * 1.15f, -kMaxYaw, kMaxYaw);
+    const float lateral_alignment =
+            std::clamp(1.0f - std::max(0.0f, abs_y - kCenterY) / 0.20f, 0.35f, 1.0f);
 
     if (abs_angle > kWalkAngle) {
-        // First rotate the body toward the ball. G1 high-level sideways walking is unreliable
-        // for ball approach, so do not sidestep here.
+        // First rotate the body toward the ball. Keep lateral zero while the ball is far off-axis
+        // because G1 high-level sideways walking is less reliable than turn-then-forward there.
         dx = 0.0f;
     } else if (ball_distance > 0.55f) {
         // Approach even with a modest angle, while continuously turning toward the ball.
         const float alignment = std::clamp(1.0f - abs_angle / kWalkAngle, 0.25f, 1.0f);
-        dx = std::clamp(ball_pos_rel.x * alignment, kMinForward, kMaxForward);
+        dx = std::clamp(ball_pos_rel.x * alignment * lateral_alignment, kMinForward, kMaxForward);
+        dy = std::clamp(ball_pos_rel.y * 0.45f, -kMaxLateral, kMaxLateral);
     } else if (abs_y <= kCenterY || abs_angle <= kAlignAngle) {
-        // Near and centered: push through the ball.
-        dx = kPushForward;
+        // Near and centered: push through the ball. Allow only a very small bounded lateral
+        // correction so small G1 foot-placement bias does not make it pass the ball on one side.
+        dx = kPushForward * lateral_alignment;
+        dy = std::clamp(ball_pos_rel.y * 0.45f, -kMaxLateral, kMaxLateral);
         da = std::clamp(ball_angle * 0.70f, -0.25f, 0.25f);
     }
 
@@ -95,7 +101,7 @@ inline std::optional<MotionCommand> g1StrikerLostBallFallbackCommand(bool has_cu
         // a few frames. Keep pushing through the last fresh estimate instead of handing control
         // back to generic positioning/search, which makes G1 turn away from the ball.
         return MotionCommand::Walk(
-                {.dx = 0.25f,
+                {.dx = 0.60f,
                  .dy = 0.0f,
                  .da = std::clamp(fallback_ball.to_direction() * 0.5f, -0.20f, 0.20f)},
                 HeadFocus::BALL);

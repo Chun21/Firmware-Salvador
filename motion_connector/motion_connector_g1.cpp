@@ -16,7 +16,7 @@ constexpr float kMaxBackwardSpeed = 0.15f;
 constexpr float kMaxSideSpeed = 0.25f;
 constexpr float kMaxNonBallSideSpeed = 0.0f;
 constexpr float kMaxYawSpeed = 0.60f;
-constexpr float kMaxForwardAccel = 0.60f;
+constexpr float kMaxForwardAccel = 1.20f;
 constexpr float kMaxSideAccel = 0.50f;
 constexpr float kMaxYawAccel = 1.00f;
 

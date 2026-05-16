@@ -34,6 +34,14 @@ MotionCommand BallSearchAgent::proceed(std::shared_ptr<Order> order) {
                 ballLastSide == Side::LEFT)) {
         return *search_command;
     }
+    const bool g1_should_defer_fallback_to_dribble =
+            !ball && g1_fallback_ball && isOrder<MoveBallOrder, MoveBallGoalOrder>(order);
+    if (g1_should_defer_fallback_to_dribble) {
+        // Let DribbleAgent consume fresh own/team fallback ball estimates. Keeping BallSearch
+        // before Dribble preserves normal lost-ball search priority, but prevents BallSearch from
+        // stealing near-ball fallback control when the camera briefly loses the ball at the feet.
+        return MotionCommand::Nothing;
+    }
     if (g1_fallback_ball) {
         if (auto fallback_command = g1StrikerLostBallFallbackCommand(
                     ball.has_value(), is_striker, *g1_fallback_ball)) {

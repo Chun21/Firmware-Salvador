@@ -90,22 +90,49 @@ MotionCommand DribbleAgent::proceed(std::shared_ptr<Order> order) {
     std::optional<RelBall> rel_ball = rel_ball_sub.latest();
     std::optional<LocPosition> loc_position = loc_position_sub.latestIfExists();
 
+#ifdef ROBOT_MODEL_G1
+    const int64_t now = time_us();
+    if (loc_position && loc_position->quality >= 0.3f) {
+        g1_last_good_loc_us = now;
+    }
+    const bool g1_has_recent_loc =
+            g1_last_good_loc_us != 0 && now - g1_last_good_loc_us <= kG1LocTtlUs;
+
+    if (rel_ball) {
+        if (!g1_has_recent_loc) {
+            return MotionCommand::Nothing;
+        }
+        if (rel_ball->pos_rel.norm() > 3.0f)  // change also in walkToPos!
+            return MotionCommand::Nothing;
+        return g1ConservativeDribbleCommand(rel_ball->pos_rel);
+    }
+
     if (!loc_position || loc_position->quality == 0) {
         return MotionCommand::Nothing;
     }
 
-#ifdef ROBOT_MODEL_G1
     const int64_t kG1BallFallbackTtl = htwk::g1::ballFallbackTtlUs();
     std::optional<point_2d> g1_ball_rel = g1_ball_fallback.updateAndSelect(
-            rel_ball, *loc_position, striker_sub.latest(), time_us(), kG1BallFallbackTtl);
+            rel_ball, *loc_position, striker_sub.latest(), now, kG1BallFallbackTtl);
     if (!g1_ball_rel) {
         return MotionCommand::Nothing;
     }
     if (g1_ball_rel->norm() > 3.0f)  // change also in walkToPos!
         return MotionCommand::Nothing;
 
+    if (!rel_ball) {
+        if (auto fallback_command =
+                    g1StrikerLostBallFallbackCommand(false, true, *g1_ball_rel)) {
+            return *fallback_command;
+        }
+    }
+
     return g1ConservativeDribbleCommand(*g1_ball_rel);
 #else
+    if (!loc_position || loc_position->quality == 0) {
+        return MotionCommand::Nothing;
+    }
+
     if (!rel_ball) {
         return MotionCommand::Nothing;
     }

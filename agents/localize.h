@@ -3,6 +3,7 @@
 #include <agent_base.h>
 #include <stl_ext.h>
 #include <localization_pub_sub.h>
+#include <multi_target_tracker_pub_sub.h>
 #include <robot_time.h>
 
 class LocalizeAgent : public AgentBase {
@@ -16,6 +17,12 @@ private:
     htwk::ChannelSubscriber<LocPosition> loc_position_sub =
             loc_position_channel.create_subscriber();
 
+#ifdef ROBOT_MODEL_G1
+    htwk::ChannelSubscriber<std::optional<RelBall>> rel_ball_sub =
+            rel_ball_channel.create_subscriber();
+    int64_t g1_last_good_loc_us = 0;
+    static constexpr int64_t kG1LocTtlUs = 3_s;
+#endif
 
     float bestQual = 0;
     const float minQual = 0.30f;
@@ -25,4 +32,3 @@ private:
     const int64_t standTime = 2._s;
     const int64_t turnTime = 2._s;
 };
-

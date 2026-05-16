@@ -13,9 +13,30 @@
 
 namespace htwk {
 
-#ifdef ROBOT_MODEL_G1
 namespace {
 
+constexpr float kDefaultBallSearchPitchCenter = 29_deg;
+constexpr float kDefaultBallSearchPitchAmplitude = 19_deg;
+constexpr float kG1BallSearchPitchCenter = -22.5_deg;
+constexpr float kG1BallSearchPitchAmplitude = 37.5_deg;
+
+constexpr float ballSearchPitchCenter() {
+#ifdef ROBOT_MODEL_G1
+    return kG1BallSearchPitchCenter;
+#else
+    return kDefaultBallSearchPitchCenter;
+#endif
+}
+
+constexpr float ballSearchPitchAmplitude() {
+#ifdef ROBOT_MODEL_G1
+    return kG1BallSearchPitchAmplitude;
+#else
+    return kDefaultBallSearchPitchAmplitude;
+#endif
+}
+
+#ifdef ROBOT_MODEL_G1
 YawPitch g1RobocupDeployStyleLocScan(float scan_time_s) {
     struct Phase {
         YawPitch target;
@@ -51,9 +72,9 @@ YawPitch g1RobocupDeployStyleLocScan(float scan_time_s) {
     }
     return YawPitch{0.0f, 0.0f};
 }
+#endif
 
 }  // namespace
-#endif
 
 /**
  * @param w current position
@@ -290,20 +311,22 @@ YawPitch HeadControl::proceed(const MotionCommand& motion_command) {
         head_pos = {smoothTriAng(time_step, sta_yaw), 15_deg};
     } else if (cur_focus == HeadFocus::BALL_SEARCH_LEFT) {
         sta_settings sta_yaw{3, 0.1f, 30_deg};
-        sta_settings sta_pitch{6, 0.1f, 19_deg};
+        sta_settings sta_pitch{6, 0.1f, ballSearchPitchAmplitude()};
         if (cur_focus != last_focus)
-            time_step = smoothTriAngStartTime(YawPitch(head_pos.yaw - .4f, head_pos.pitch - 29_deg),
-                                              sta_yaw, sta_pitch);
+            time_step = smoothTriAngStartTime(
+                    YawPitch(head_pos.yaw - .4f, head_pos.pitch - ballSearchPitchCenter()),
+                    sta_yaw, sta_pitch);
         head_pos = {.4f + smoothTriAng(time_step, sta_yaw),
-                    smoothTriAng(time_step, sta_pitch) + 29_deg};
+                    smoothTriAng(time_step, sta_pitch) + ballSearchPitchCenter()};
     } else if (cur_focus == HeadFocus::BALL_SEARCH_RIGHT) {
         sta_settings sta_yaw{-3, 0.1f, 30_deg};
-        sta_settings sta_pitch{6, 0.1f, 19_deg};
+        sta_settings sta_pitch{6, 0.1f, ballSearchPitchAmplitude()};
         if (cur_focus != last_focus)
-            time_step = smoothTriAngStartTime(YawPitch(head_pos.yaw + .4f, head_pos.pitch - 29_deg),
-                                              sta_yaw, sta_pitch);
+            time_step = smoothTriAngStartTime(
+                    YawPitch(head_pos.yaw + .4f, head_pos.pitch - ballSearchPitchCenter()),
+                    sta_yaw, sta_pitch);
         head_pos = {-.4f + smoothTriAng(time_step, sta_yaw),
-                    smoothTriAng(time_step, sta_pitch) + 29_deg};
+                    smoothTriAng(time_step, sta_pitch) + ballSearchPitchCenter()};
     } else {
         head_pos = {0, 0};
     }

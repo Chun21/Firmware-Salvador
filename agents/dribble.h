@@ -34,6 +34,8 @@ private:
     htwk::ChannelSubscriber<std::optional<TeamComData>> striker_sub =
             striker_channel.create_subscriber();
     htwk::g1::BallFallbackMemory g1_ball_fallback;
+    int64_t g1_last_good_loc_us = 0;
+    static constexpr int64_t kG1LocTtlUs = 3_s;
 #endif
 
     htwk::ChannelSubscriber<std::shared_ptr<htwk::NearObstacleTrackerResult>>

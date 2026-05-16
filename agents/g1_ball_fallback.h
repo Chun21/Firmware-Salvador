@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 
 #include "localization_utils.h"
@@ -13,8 +14,16 @@
 
 namespace htwk::g1 {
 
+namespace detail {
+
+inline std::mutex shared_ball_fallback_mutex;
+inline std::optional<point_2d> shared_own_ball_abs;
+inline int64_t shared_own_ball_time_us = 0;
+
+}  // namespace detail
+
 inline int64_t ballFallbackTtlUs() {
-    constexpr int64_t kDefaultTtlUs = 5'000'000;
+    constexpr int64_t kDefaultTtlUs = 3'000'000;
     const char* raw = std::getenv("ROBOCUP_G1_BALL_FALLBACK_TTL_SEC");
     if (raw == nullptr || raw[0] == '\0') {
         return kDefaultTtlUs;
@@ -49,8 +58,15 @@ public:
             return LocalizationUtils::absToRel(abs_ball, own_loc.position);
         }
 
-        if (last_own_ball_abs && now_us - last_own_ball_time_us <= ttl_us) {
-            return LocalizationUtils::absToRel(*last_own_ball_abs, own_loc.position);
+        std::optional<point_2d> own_ball_abs;
+        int64_t own_ball_time_us = 0;
+        {
+            std::lock_guard<std::mutex> lock(detail::shared_ball_fallback_mutex);
+            own_ball_abs = detail::shared_own_ball_abs;
+            own_ball_time_us = detail::shared_own_ball_time_us;
+        }
+        if (own_ball_abs && now_us - own_ball_time_us <= ttl_us) {
+            return LocalizationUtils::absToRel(*own_ball_abs, own_loc.position);
         }
 
         return std::nullopt;
@@ -65,7 +81,9 @@ public:
         if (teammate && freshTeamBall(*teammate, now_us, ttl_us)) {
             return true;
         }
-        return last_own_ball_abs && now_us - last_own_ball_time_us <= ttl_us;
+        std::lock_guard<std::mutex> lock(detail::shared_ball_fallback_mutex);
+        return detail::shared_own_ball_abs &&
+               now_us - detail::shared_own_ball_time_us <= ttl_us;
     }
 
 private:
@@ -76,12 +94,12 @@ private:
         // Always overwrite with the newest own observation immediately. Use the current update
         // time for TTL bookkeeping so a freshly received ball cannot be treated as stale because
         // of transport or adapter timestamp jitter.
-        last_own_ball_abs = LocalizationUtils::relToAbs(rel_ball.pos_rel, own_loc.position);
-        last_own_ball_time_us = now_us;
+        const point_2d own_ball_abs =
+                LocalizationUtils::relToAbs(rel_ball.pos_rel, own_loc.position);
+        std::lock_guard<std::mutex> lock(detail::shared_ball_fallback_mutex);
+        detail::shared_own_ball_abs = own_ball_abs;
+        detail::shared_own_ball_time_us = now_us;
     }
-
-    std::optional<point_2d> last_own_ball_abs;
-    int64_t last_own_ball_time_us = 0;
 };
 
 }  // namespace htwk::g1
